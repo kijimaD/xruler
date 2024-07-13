@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
@@ -32,14 +33,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// TODO: 移動時に毎回実行したい
-	conn, err := xgb.NewConn()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-	getCursor(conn)
-
 	// ルートウィンドウに対してカーソルを設定
 	root := xwindow.New(X, X.RootWin())
 	xproto.ChangeWindowAttributes(X.Conn(), root.Id, xproto.CwCursor, []uint32{uint32(cursor)})
@@ -53,6 +46,19 @@ func main() {
 			log.Printf("Mouse moved to (%d, %d)", ev.EventX, ev.EventY)
 		}).Connect(X, X.RootWin())
 
+	conn, err := xgb.NewConn()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer conn.Close()
+	go func() {
+		for {
+			// TODO: パフォーマンスの問題がある。移動時に毎回実行したい
+			getCursor(conn)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
 	// イベントループを開始
 	xevent.Main(X)
 }
@@ -63,7 +69,6 @@ func getCursor(conn *xgb.Conn) {
 	setup := xproto.Setup(conn)
 	root := setup.DefaultScreen(conn).Root
 
-	defer conn.Close()
 	reply, err := xproto.QueryPointer(conn, root).Reply()
 	if err != nil {
 		log.Fatal(err)
