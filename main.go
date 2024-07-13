@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
+	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xcursor"
+	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
 
@@ -29,24 +32,41 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Create a new window. In the create window request, we'll set the
-	// background color and set the cursor we created above.
-	// This results in changing the cursor only when it moves into this window.
-	win, err := xwindow.Generate(X)
+	// TODO: 移動時に毎回実行したい
+	conn, err := xgb.NewConn()
 	if err != nil {
 		log.Fatal(err)
 	}
-	win.Create(X.RootWin(), 0, 0, 500, 500,
-		xproto.CwBackPixel|xproto.CwCursor,
-		0xffffffff, uint32(cursor))
-	win.Map()
+	defer conn.Close()
+	getCursor(conn)
 
-	// We can free the cursor now that we've set it.
-	// If you plan on using this cursor again, then it shouldn't be freed.
-	// (i.e., if you try to free this before setting it as the cursor in a
-	// window, you'll get a BadCursor error when trying to use it.)
+	// ルートウィンドウに対してカーソルを設定
+	root := xwindow.New(X, X.RootWin())
+	xproto.ChangeWindowAttributes(X.Conn(), root.Id, xproto.CwCursor, []uint32{uint32(cursor)})
+
+	// カーソルを解放（もう使わない場合）
 	xproto.FreeCursor(X.Conn(), cursor)
 
-	// Block. No need to process any events.
-	select {}
+	// マウスイベントのリスナーを追加
+	xevent.MotionNotifyFun(
+		func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
+			log.Printf("Mouse moved to (%d, %d)", ev.EventX, ev.EventY)
+		}).Connect(X, X.RootWin())
+
+	// イベントループを開始
+	xevent.Main(X)
+}
+
+// カーソルの位置を取得
+func getCursor(conn *xgb.Conn) {
+	// ルートウィンドウの取得
+	setup := xproto.Setup(conn)
+	root := setup.DefaultScreen(conn).Root
+
+	defer conn.Close()
+	reply, err := xproto.QueryPointer(conn, root).Reply()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("Cursor position: (%d, %d)\n", reply.RootX, reply.RootY)
 }
