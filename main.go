@@ -6,11 +6,15 @@ import (
 	"time"
 
 	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
+
+const cursorWidth = 10
+const cursorHeight = 10
 
 func main() {
 	X, err := xgbutil.NewConn()
@@ -26,8 +30,8 @@ func main() {
 		X.RootWin(),
 		0,
 		0,
-		10,
-		10,
+		cursorWidth,
+		cursorHeight,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		0x00000000,
 		1,
@@ -51,12 +55,38 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
+
+			// xfixes拡張
+			err = xfixes.Init(X2)
+			if err != nil {
+				log.Fatalf("Cannot initialize XFixes extension: %v", err)
+			}
+
 			windowID := xproto.Window(win.Id)
 			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-				[]uint32{uint32(cx), uint32(cy)})
+				[]uint32{uint32(cx - cursorWidth/2), uint32(cy - cursorHeight/2)})
+
+			// クリックできるようにする
+			{
+				rect := xproto.Rectangle{
+					X:      0,
+					Y:      0,
+					Width:  200,
+					Height: 200,
+				}
+
+				region, err := xfixes.NewRegionId(X2)
+				if err != nil {
+					log.Fatalf("NewRegion failed: %v", err)
+				}
+				xfixes.CreateRegion(X2, region, []xproto.Rectangle{rect})
+
+				// Regionを破棄
+				xfixes.DestroyRegion(X2, region)
+			}
+
 			X2.Sync()
 			X2.Close()
-
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
