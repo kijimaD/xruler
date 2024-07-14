@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"time"
 
 	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/shape"
 	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
@@ -30,8 +30,8 @@ func main() {
 		X.RootWin(),
 		0,
 		0,
-		cursorWidth,
-		cursorHeight,
+		cursorWidth*4,
+		cursorHeight*4,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		0x00000000,
 		1,
@@ -45,50 +45,56 @@ func main() {
 		log.Fatal(err)
 	}
 	defer X2.Close()
+	X2.Sync()
 
-	xevent.MotionNotifyFun(
-		func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
-			ev = motionNotify(X, ev)
-			fmt.Printf("COMPRESSED: (EventX %d, EventY %d)\n", ev.EventX, ev.EventY)
+	// クリックできるようにする
+	{
+		err = xfixes.Init(X2)
+		if err != nil {
+			log.Fatalf("Cannot initialize XFixes extension: %v", err)
+		}
+		rect := xproto.Rectangle{
+			X:      0,
+			Y:      0,
+			Width:  20,
+			Height: 20,
+		}
 
-		}).Connect(X, win.Id)
-	go func() {
-		xevent.Main(X)
-	}()
+		region, err := xfixes.NewRegionId(X2)
+		if err != nil {
+			log.Fatalf("NewRegion failed: %v", err)
+		}
+		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{rect})
+		if err := cookie.Check(); err != nil {
+			// ここで失敗している。なぜなのかわからない
+			log.Fatalf("CreateRegionChecked failed: %v", err)
+		}
+		windowID := xproto.Window(win.Id)
+		cookie2 := xfixes.SetWindowShapeRegionChecked(X2, windowID, shape.SkInput, 0, 0, region)
+		if err := cookie2.Check(); err != nil {
+			log.Fatalf("SetWindowShapeRegionChecked: %v", err)
+		}
+		xfixes.DestroyRegion(X2, region)
+	}
+
+	// xevent.MotionNotifyFun(
+	// 	func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
+	// 		ev = motionNotify(X, ev)
+	// 		fmt.Printf("COMPRESSED: (EventX %d, EventY %d)\n", ev.EventX, ev.EventY)
+
+	// 	}).Connect(X, win.Id)
+	// go func() {
+	// 	xevent.Main(X)
+	// }()
 
 	for {
 		go func() {
 			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
 			cx, cy := getCursor(X2)
 
-			// xfixes拡張
-			err = xfixes.Init(X2)
-			if err != nil {
-				log.Fatalf("Cannot initialize XFixes extension: %v", err)
-			}
-
 			windowID := xproto.Window(win.Id)
 			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
 				[]uint32{uint32(cx - cursorWidth/2), uint32(cy - cursorHeight/2)})
-
-			// クリックできるようにする
-			{
-				rect := xproto.Rectangle{
-					X:      0,
-					Y:      0,
-					Width:  200,
-					Height: 200,
-				}
-
-				region, err := xfixes.NewRegionId(X2)
-				if err != nil {
-					log.Fatalf("NewRegion failed: %v", err)
-				}
-				xfixes.CreateRegion(X2, region, []xproto.Rectangle{rect})
-
-				// Regionを破棄
-				xfixes.DestroyRegion(X2, region)
-			}
 
 			X2.Sync()
 		}()
