@@ -8,7 +8,6 @@ import (
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
-	"github.com/BurntSushi/xgbutil/xcursor"
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
@@ -19,32 +18,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Create the cursor. You can find a list of available cursors in
-	// xcursor/cursordef.go.
-	// We'll make an umbrella here, with an orange foreground and a blue
-	// background. (The background it typically the outline of the cursor.)
-	// Note that each component of the RGB color is a 16 bit color. I think
-	// using the most significant byte to specify each component is good
-	// enough.
-	cursor, err := xcursor.CreateCursorExtra(X, xcursor.Umbrella,
-		0xff00, 0x5500, 0x0000,
-		0x3300, 0x6600, 0xff00)
+	win, err := xwindow.Generate(X)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// ルートウィンドウに対してカーソルを設定
-	root := xwindow.New(X, X.RootWin())
-	xproto.ChangeWindowAttributes(X.Conn(), root.Id, xproto.CwCursor, []uint32{uint32(cursor)})
-
-	// カーソルを解放（もう使わない場合）
-	xproto.FreeCursor(X.Conn(), cursor)
-
-	// マウスイベントのリスナーを追加
-	xevent.MotionNotifyFun(
-		func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
-			log.Printf("Mouse moved to (%d, %d)", ev.EventX, ev.EventY)
-		}).Connect(X, X.RootWin())
+	win.Create(
+		X.RootWin(),
+		0,
+		0,
+		10,
+		10,
+		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
+		0x00000000,
+		1,
+		xproto.EventMaskButtonRelease,
+	)
+	win.Map()
 
 	conn, err := xgb.NewConn()
 	if err != nil {
@@ -53,18 +42,30 @@ func main() {
 	defer conn.Close()
 	go func() {
 		for {
-			// TODO: パフォーマンスの問題がある。移動時に毎回実行したい
-			getCursor(conn)
+			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
+			cx, cy := getCursor(conn)
+			fmt.Printf("Cursor position: (%d, %d)\n", cx, cy)
+
+			// Xサーバに接続
+			X2, err := xgb.NewConn()
+			if err != nil {
+				log.Fatal(err)
+			}
+			windowID := xproto.Window(win.Id)
+			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
+				[]uint32{uint32(cx), uint32(cy)})
+			X2.Sync()
+			X2.Close()
+
 			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 
-	// イベントループを開始
 	xevent.Main(X)
 }
 
 // カーソルの位置を取得
-func getCursor(conn *xgb.Conn) {
+func getCursor(conn *xgb.Conn) (int, int) {
 	// ルートウィンドウの取得
 	setup := xproto.Setup(conn)
 	root := setup.DefaultScreen(conn).Root
@@ -73,5 +74,6 @@ func getCursor(conn *xgb.Conn) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("Cursor position: (%d, %d)\n", reply.RootX, reply.RootY)
+
+	return int(reply.RootX), int(reply.RootY)
 }
