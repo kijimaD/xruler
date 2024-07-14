@@ -35,26 +35,31 @@ func main() {
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		0x00000000,
 		1,
-		xproto.EventMaskButtonRelease,
+		xproto.EventMaskPointerMotion,
 	)
 	win.Map()
 
-	conn, err := xgb.NewConn()
+	// Xサーバに接続
+	X2, err := xgb.NewConn()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer conn.Close()
-	go func() {
-		for {
-			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
-			cx, cy := getCursor(conn)
-			fmt.Printf("Cursor position: (%d, %d)\n", cx, cy)
+	defer X2.Close()
 
-			// Xサーバに接続
-			X2, err := xgb.NewConn()
-			if err != nil {
-				log.Fatal(err)
-			}
+	xevent.MotionNotifyFun(
+		func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
+			ev = motionNotify(X, ev)
+			fmt.Printf("COMPRESSED: (EventX %d, EventY %d)\n", ev.EventX, ev.EventY)
+
+		}).Connect(X, win.Id)
+	go func() {
+		xevent.Main(X)
+	}()
+
+	for {
+		go func() {
+			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
+			cx, cy := getCursor(X2)
 
 			// xfixes拡張
 			err = xfixes.Init(X2)
@@ -86,12 +91,9 @@ func main() {
 			}
 
 			X2.Sync()
-			X2.Close()
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
-
-	xevent.Main(X)
+		}()
+		time.Sleep(1000 * time.Millisecond)
+	}
 }
 
 // カーソルの位置を取得
@@ -106,4 +108,31 @@ func getCursor(conn *xgb.Conn) (int, int) {
 	}
 
 	return int(reply.RootX), int(reply.RootY)
+}
+
+func motionNotify(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) xevent.MotionNotifyEvent {
+	X.Sync()
+	xevent.Read(X, false)
+	laste := ev
+
+	for i, ee := range xevent.Peek(X) {
+		if ee.Err != nil { // This is an error, skip it.
+			continue
+		}
+
+		if mn, ok := ee.Event.(xproto.MotionNotifyEvent); ok {
+			if ev.Event == mn.Event && ev.Child == mn.Child &&
+				ev.Detail == mn.Detail && ev.State == mn.State &&
+				ev.Root == mn.Root && ev.SameScreen == mn.SameScreen {
+
+				laste = xevent.MotionNotifyEvent{&mn}
+
+				defer func(i int) { xevent.DequeueAt(X, i) }(i)
+			}
+		}
+	}
+
+	X.TimeSet(laste.Time)
+
+	return laste
 }
