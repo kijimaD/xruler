@@ -9,7 +9,6 @@ import (
 	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
-	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
 
@@ -111,6 +110,8 @@ func main() {
 		}
 	}
 
+	// FIXME: カーソル移動の通知で動作させたいけど、カーソルが当たってないと通知されない
+	// クリックを邪魔しないように設定しているのと、両立できるのかわからない
 	// xevent.MotionNotifyFun(
 	// 	func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
 	// 		ev = motionNotify(X, ev)
@@ -150,31 +151,4 @@ func getCursor(conn *xgb.Conn) (int, int) {
 	}
 
 	return int(reply.RootX), int(reply.RootY)
-}
-
-func motionNotify(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) xevent.MotionNotifyEvent {
-	X.Sync()
-	xevent.Read(X, false)
-	laste := ev
-
-	for i, ee := range xevent.Peek(X) {
-		if ee.Err != nil { // This is an error, skip it.
-			continue
-		}
-
-		if mn, ok := ee.Event.(xproto.MotionNotifyEvent); ok {
-			if ev.Event == mn.Event && ev.Child == mn.Child &&
-				ev.Detail == mn.Detail && ev.State == mn.State &&
-				ev.Root == mn.Root && ev.SameScreen == mn.SameScreen {
-
-				laste = xevent.MotionNotifyEvent{&mn}
-
-				defer func(i int) { xevent.DequeueAt(X, i) }(i)
-			}
-		}
-	}
-
-	X.TimeSet(laste.Time)
-
-	return laste
 }
