@@ -1,4 +1,4 @@
-module xruler
+module github.com/kijimaD/xruler
 
 go 1.21.3
 
