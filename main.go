@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	win.Create(
+	if err := win.CreateChecked(
 		X.RootWin(),
 		0,
 		0,
@@ -36,7 +36,9 @@ func main() {
 		0x00000000,
 		1,
 		xproto.EventMaskPointerMotion,
-	)
+	); err != nil {
+		log.Fatal(err)
+	}
 	win.Map()
 
 	// Xサーバに接続
@@ -53,11 +55,12 @@ func main() {
 		if err != nil {
 			log.Fatalf("Cannot initialize XFixes extension: %v", err)
 		}
+
 		rect := xproto.Rectangle{
 			X:      0,
 			Y:      0,
-			Width:  20,
-			Height: 20,
+			Width:  10,
+			Height: 10,
 		}
 
 		region, err := xfixes.NewRegionId(X2)
