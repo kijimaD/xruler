@@ -73,18 +73,12 @@ func main() {
 			log.Fatalf("Failed to query XFixes version: %v", err)
 		}
 
-		rect := xproto.Rectangle{
-			X:      0,
-			Y:      0,
-			Width:  10,
-			Height: 10,
-		}
-
 		region, err := xfixes.NewRegionId(X2)
 		if err != nil {
 			log.Fatalf("NewRegion failed: %v", err)
 		}
-		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{rect})
+		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにするq
+		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{xproto.Rectangle{}})
 		if err := cookie.Check(); err != nil {
 			log.Fatalf("CreateRegionChecked failed: %v", err)
 		}
@@ -117,7 +111,7 @@ func main() {
 
 			X2.Sync()
 		}()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
