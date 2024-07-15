@@ -49,6 +49,15 @@ func main() {
 	defer X2.Close()
 	X2.Sync()
 
+	// 拡張が読み込まれているか確認する
+	extension, err := xproto.QueryExtension(X2, uint16(len("XFIXES")), "XFIXES").Reply()
+	if err != nil {
+		log.Fatalf("QueryExtension failed: %v", err)
+	}
+	if !extension.Present {
+		log.Fatalf("XFIXES extension is not present")
+	}
+
 	// クリックできるようにする
 	{
 		err = xfixes.Init(X2)
