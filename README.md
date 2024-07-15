@@ -2,23 +2,30 @@ Screen ruler running on X Window System.
 
 ![](demo.gif)
 
-Inspired by [swillner/highlight-pointer](https://github.com/swillner/highlight-pointer).
+## Installation
 
-## Run
+Download the `xruler` binary from the [releases
+page](https://github.com/kijimaD/xruler/releases/latest).
 
-```shell
-$ go run .
-```
-
-If you want to make the ruler transparent, you need to run compton!
+If you want to make the ruler transparent, need to run compton!
 
 ```shell
 $ apt install compton
 $ compton
 ```
 
-## Debug
+## Development
 
+run
+```shell
+$ go run .
+```
+
+trace X Window log
 ```shell
 $ go build . && xtrace -o output.log ./xruler
 ```
+
+## Reference
+
+Inspired by [swillner/highlight-pointer](https://github.com/swillner/highlight-pointer).
