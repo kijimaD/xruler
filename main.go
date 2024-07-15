@@ -133,7 +133,7 @@ func main() {
 
 			windowID := xproto.Window(win.Id)
 			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-				[]uint32{uint32(0), uint32(cy - cursorHeight)})
+				[]uint32{uint32(0), uint32(cy - cursorHeight/2)})
 
 			X2.Sync()
 		}

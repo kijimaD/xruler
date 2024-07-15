@@ -1,4 +1,4 @@
-Screen ruler running on x window system.
+Screen ruler running on X Window System.
 
 ![](demo.gif)
 
@@ -20,5 +20,5 @@ $ compton
 ## Debug
 
 ```shell
-$ go build . && xtrace -o output.log ./xpoint
+$ go build . && xtrace -o output.log ./xruler
 ```
