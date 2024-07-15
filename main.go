@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"log"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
 
-const cursorWidth = 10
-const cursorHeight = 10
+const cursorHeight = 20
+const fillColor = 0x808080
 
 func main() {
 	X, err := xgbutil.NewConn()
@@ -30,11 +31,11 @@ func main() {
 		X.RootWin(),
 		0,
 		0,
-		cursorWidth*4,
-		cursorHeight*4,
+		1960, // TODO: 動的に幅いっぱいにする
+		cursorHeight,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
-		0x00000000,
-		1,
+		fillColor,
+		1, // true
 		xproto.EventMaskPointerMotion,
 	); err != nil {
 		log.Fatal(err)
@@ -58,14 +59,14 @@ func main() {
 		log.Fatalf("XFIXES extension is not present")
 	}
 
-	// クリックできるようにする
+	// ignore click
 	{
 		err = xfixes.Init(X2)
 		if err != nil {
 			log.Fatalf("Cannot initialize XFixes extension: %v", err)
 		}
 		// XFixesのバージョンを問い合わせる
-		// MEMO: なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
+		// MEMO: 必須。なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
 		major := uint32(6)
 		minor := uint32(0)
 		_, err := xfixes.QueryVersion(X2, major, minor).Reply()
@@ -77,7 +78,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("NewRegion failed: %v", err)
 		}
-		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにするq
+		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにする
 		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{xproto.Rectangle{}})
 		if err := cookie.Check(); err != nil {
 			log.Fatalf("CreateRegionChecked failed: %v", err)
@@ -88,6 +89,30 @@ func main() {
 			log.Fatalf("SetWindowShapeRegionChecked: %v", err)
 		}
 		xfixes.DestroyRegion(X2, region)
+	}
+
+	// set transparency
+	{
+		windowID := xproto.Window(win.Id)
+		atom, err := xproto.InternAtom(X2, true, uint16(len("_NET_WM_WINDOW_OPACITY")), "_NET_WM_WINDOW_OPACITY").Reply()
+		if err != nil {
+			log.Fatalf("InternAtom failed: %v", err)
+		}
+		opacity := uint32(0x50808080)
+		opacityBytes := make([]byte, 4)
+		binary.LittleEndian.PutUint32(opacityBytes, opacity)
+		if err := xproto.ChangePropertyChecked(
+			X2,
+			xproto.PropModeReplace,
+			windowID,
+			atom.Atom,
+			xproto.AtomCardinal,
+			32,
+			1,
+			opacityBytes,
+		).Check(); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// xevent.MotionNotifyFun(
@@ -101,16 +126,18 @@ func main() {
 	// }()
 
 	for {
-		go func() {
+		// sync cursor movement
+		{
 			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
-			cx, cy := getCursor(X2)
+			_, cy := getCursor(X2)
 
 			windowID := xproto.Window(win.Id)
 			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-				[]uint32{uint32(cx - cursorWidth/2), uint32(cy - cursorHeight/2)})
+				[]uint32{uint32(0), uint32(cy - cursorHeight)})
 
 			X2.Sync()
-		}()
+		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
 }
