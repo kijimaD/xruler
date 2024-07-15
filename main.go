@@ -86,11 +86,6 @@ func main() {
 		}
 		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{rect})
 		if err := cookie.Check(); err != nil {
-			// ここで失敗している。なぜなのかわからない
-			// ログ上は、Cで書いたのと同じリクエストを送っているように見える
-			// 親ウィンドウとか、そのあたりの違いだろうか
-			// 001:<:0004: 16: XFIXES-Request(138,5): CreateRegion region=0x05600001 rectangles={x=0 y=0 w=10 h=10};
-			// 001:>:0004:Error 1=Request: major=138, minor=5, bad=0x00000000, seq=0004
 			log.Fatalf("CreateRegionChecked failed: %v", err)
 		}
 		windowID := xproto.Window(win.Id)
