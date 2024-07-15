@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"log"
 	"time"
 
@@ -98,9 +97,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("InternAtom failed: %v", err)
 		}
-		opacity := uint32(0x50808080)
-		opacityBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(opacityBytes, opacity)
 		if err := xproto.ChangePropertyChecked(
 			X2,
 			xproto.PropModeReplace,
@@ -109,7 +105,7 @@ func main() {
 			xproto.AtomCardinal,
 			32,
 			1,
-			opacityBytes,
+			[]byte{0x00, 0x00, 0x00, 0x5a}, // Goライブラリでは[]byte型だが、Cライブラリだとuint32。4バイト分必要で、足りないとエラー"slice bounds out of range"になるので埋める
 		).Check(); err != nil {
 			log.Fatal(err)
 		}
