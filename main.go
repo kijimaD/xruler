@@ -64,6 +64,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("Cannot initialize XFixes extension: %v", err)
 		}
+		// XFixesのバージョンを問い合わせる
+		// MEMO: なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
+		major := uint32(6)
+		minor := uint32(0)
+		_, err := xfixes.QueryVersion(X2, major, minor).Reply()
+		if err != nil {
+			log.Fatalf("Failed to query XFixes version: %v", err)
+		}
 
 		rect := xproto.Rectangle{
 			X:      0,
@@ -114,7 +122,7 @@ func main() {
 
 			X2.Sync()
 		}()
-		time.Sleep(1000 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
