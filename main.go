@@ -15,17 +15,45 @@ import (
 const cursorHeight = 20
 const fillColor = 0x808080
 
+var xConn *xgb.Conn
+var xuConn *xgbutil.XUtil
+var xWin *xwindow.Window
+
 func main() {
-	xuConn, err := xgbutil.NewConn()
-	if err != nil {
+	defer xConn.Close()
+	if err := initWindow(); err != nil {
 		log.Fatal(err)
 	}
 
-	win, err := xwindow.Generate(xuConn)
-	if err != nil {
-		log.Fatal(err)
+	for {
+		// sync cursor movement
+		{
+			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
+			_, cy := getCursor(xConn)
+
+			windowID := xproto.Window(xWin.Id)
+			xproto.ConfigureWindow(xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
+				[]uint32{uint32(0), uint32(cy - cursorHeight/2)})
+
+			xConn.Sync()
+		}
+
+		time.Sleep(10 * time.Millisecond)
 	}
-	if err := win.CreateChecked(
+}
+
+func initWindow() error {
+	var err error
+	xuConn, err = xgbutil.NewConn()
+	if err != nil {
+		return err
+	}
+
+	xWin, err = xwindow.Generate(xuConn)
+	if err != nil {
+		return err
+	}
+	if err := xWin.CreateChecked(
 		xuConn.RootWin(),
 		0,
 		0,
@@ -36,32 +64,31 @@ func main() {
 		1, // true
 		xproto.EventMaskPointerMotion,
 	); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	win.Map()
+	xWin.Map()
 
 	// Xサーバに接続
-	xConn, err := xgb.NewConn()
+	xConn, err = xgb.NewConn()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer xConn.Close()
 	xConn.Sync()
 
 	// 拡張が読み込まれているか確認する
 	extension, err := xproto.QueryExtension(xConn, uint16(len("XFIXES")), "XFIXES").Reply()
 	if err != nil {
-		log.Fatalf("QueryExtension failed: %v", err)
+		return err
 	}
 	if !extension.Present {
-		log.Fatalf("XFIXES extension is not present")
+		return err
 	}
 
 	// ignore click
 	{
 		err = xfixes.Init(xConn)
 		if err != nil {
-			log.Fatalf("Cannot initialize XFixes extension: %v", err)
+			return err
 		}
 		// XFixesのバージョンを問い合わせる
 		// MEMO: 必須。なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
@@ -69,32 +96,32 @@ func main() {
 		minor := uint32(0)
 		_, err := xfixes.QueryVersion(xConn, major, minor).Reply()
 		if err != nil {
-			log.Fatalf("Failed to query XFixes version: %v", err)
+			return err
 		}
 
 		region, err := xfixes.NewRegionId(xConn)
 		if err != nil {
-			log.Fatalf("NewRegion failed: %v", err)
+			return err
 		}
 		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにする
 		cookie := xfixes.CreateRegionChecked(xConn, region, []xproto.Rectangle{xproto.Rectangle{}})
 		if err := cookie.Check(); err != nil {
-			log.Fatalf("CreateRegionChecked failed: %v", err)
+			return err
 		}
-		windowID := xproto.Window(win.Id)
+		windowID := xproto.Window(xWin.Id)
 		cookie2 := xfixes.SetWindowShapeRegionChecked(xConn, windowID, shape.SkInput, 0, 0, region)
 		if err := cookie2.Check(); err != nil {
-			log.Fatalf("SetWindowShapeRegionChecked: %v", err)
+			return err
 		}
 		xfixes.DestroyRegion(xConn, region)
 	}
 
 	// set transparency
 	{
-		windowID := xproto.Window(win.Id)
+		windowID := xproto.Window(xWin.Id)
 		atom, err := xproto.InternAtom(xConn, true, uint16(len("_NET_WM_WINDOW_OPACITY")), "_NET_WM_WINDOW_OPACITY").Reply()
 		if err != nil {
-			log.Fatalf("InternAtom failed: %v", err)
+			return err
 		}
 		if err := xproto.ChangePropertyChecked(
 			xConn,
@@ -106,7 +133,7 @@ func main() {
 			1,
 			[]byte{0x00, 0x00, 0x00, 0x5a}, // Goライブラリでは[]byte型だが、Cライブラリだとuint32。4バイト分必要で、足りないとエラー"slice bounds out of range"になるので埋める
 		).Check(); err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 
@@ -122,21 +149,7 @@ func main() {
 	// 	xevent.Main(X)
 	// }()
 
-	for {
-		// sync cursor movement
-		{
-			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
-			_, cy := getCursor(xConn)
-
-			windowID := xproto.Window(win.Id)
-			xproto.ConfigureWindow(xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-				[]uint32{uint32(0), uint32(cy - cursorHeight/2)})
-
-			xConn.Sync()
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
+	return nil
 }
 
 // カーソルの位置を取得
