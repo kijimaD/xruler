@@ -16,17 +16,17 @@ const cursorHeight = 20
 const fillColor = 0x808080
 
 func main() {
-	X, err := xgbutil.NewConn()
+	xuConn, err := xgbutil.NewConn()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	win, err := xwindow.Generate(X)
+	win, err := xwindow.Generate(xuConn)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if err := win.CreateChecked(
-		X.RootWin(),
+		xuConn.RootWin(),
 		0,
 		0,
 		1960, // TODO: 動的に幅いっぱいにする
@@ -41,15 +41,15 @@ func main() {
 	win.Map()
 
 	// Xサーバに接続
-	X2, err := xgb.NewConn()
+	xConn, err := xgb.NewConn()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer X2.Close()
-	X2.Sync()
+	defer xConn.Close()
+	xConn.Sync()
 
 	// 拡張が読み込まれているか確認する
-	extension, err := xproto.QueryExtension(X2, uint16(len("XFIXES")), "XFIXES").Reply()
+	extension, err := xproto.QueryExtension(xConn, uint16(len("XFIXES")), "XFIXES").Reply()
 	if err != nil {
 		log.Fatalf("QueryExtension failed: %v", err)
 	}
@@ -59,7 +59,7 @@ func main() {
 
 	// ignore click
 	{
-		err = xfixes.Init(X2)
+		err = xfixes.Init(xConn)
 		if err != nil {
 			log.Fatalf("Cannot initialize XFixes extension: %v", err)
 		}
@@ -67,37 +67,37 @@ func main() {
 		// MEMO: 必須。なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
 		major := uint32(6)
 		minor := uint32(0)
-		_, err := xfixes.QueryVersion(X2, major, minor).Reply()
+		_, err := xfixes.QueryVersion(xConn, major, minor).Reply()
 		if err != nil {
 			log.Fatalf("Failed to query XFixes version: %v", err)
 		}
 
-		region, err := xfixes.NewRegionId(X2)
+		region, err := xfixes.NewRegionId(xConn)
 		if err != nil {
 			log.Fatalf("NewRegion failed: %v", err)
 		}
 		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにする
-		cookie := xfixes.CreateRegionChecked(X2, region, []xproto.Rectangle{xproto.Rectangle{}})
+		cookie := xfixes.CreateRegionChecked(xConn, region, []xproto.Rectangle{xproto.Rectangle{}})
 		if err := cookie.Check(); err != nil {
 			log.Fatalf("CreateRegionChecked failed: %v", err)
 		}
 		windowID := xproto.Window(win.Id)
-		cookie2 := xfixes.SetWindowShapeRegionChecked(X2, windowID, shape.SkInput, 0, 0, region)
+		cookie2 := xfixes.SetWindowShapeRegionChecked(xConn, windowID, shape.SkInput, 0, 0, region)
 		if err := cookie2.Check(); err != nil {
 			log.Fatalf("SetWindowShapeRegionChecked: %v", err)
 		}
-		xfixes.DestroyRegion(X2, region)
+		xfixes.DestroyRegion(xConn, region)
 	}
 
 	// set transparency
 	{
 		windowID := xproto.Window(win.Id)
-		atom, err := xproto.InternAtom(X2, true, uint16(len("_NET_WM_WINDOW_OPACITY")), "_NET_WM_WINDOW_OPACITY").Reply()
+		atom, err := xproto.InternAtom(xConn, true, uint16(len("_NET_WM_WINDOW_OPACITY")), "_NET_WM_WINDOW_OPACITY").Reply()
 		if err != nil {
 			log.Fatalf("InternAtom failed: %v", err)
 		}
 		if err := xproto.ChangePropertyChecked(
-			X2,
+			xConn,
 			xproto.PropModeReplace,
 			windowID,
 			atom.Atom,
@@ -126,13 +126,13 @@ func main() {
 		// sync cursor movement
 		{
 			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
-			_, cy := getCursor(X2)
+			_, cy := getCursor(xConn)
 
 			windowID := xproto.Window(win.Id)
-			xproto.ConfigureWindow(X2, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
+			xproto.ConfigureWindow(xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
 				[]uint32{uint32(0), uint32(cy - cursorHeight/2)})
 
-			X2.Sync()
+			xConn.Sync()
 		}
 
 		time.Sleep(10 * time.Millisecond)
