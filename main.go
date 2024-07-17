@@ -61,15 +61,18 @@ func initWindow() error {
 	}
 	xConn.Sync()
 
-	setup := xproto.Setup(xConn)
-	screen := setup.DefaultScreen(xConn)
-	screenWidth := screen.WidthInPixels
+	var screenWidth int
+	{
+		setup := xproto.Setup(xConn)
+		screen := setup.DefaultScreen(xConn)
+		screenWidth = int(screen.WidthInPixels)
+	}
 
 	if err := xWin.CreateChecked(
 		xuConn.RootWin(),
 		0,
 		0,
-		int(screenWidth),
+		screenWidth,
 		cursorHeight,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		fillColor,
