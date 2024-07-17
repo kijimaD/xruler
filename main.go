@@ -53,11 +53,23 @@ func initWindow() error {
 	if err != nil {
 		return err
 	}
+
+	// Xサーバに接続
+	xConn, err = xgb.NewConn()
+	if err != nil {
+		return err
+	}
+	xConn.Sync()
+
+	setup := xproto.Setup(xConn)
+	screen := setup.DefaultScreen(xConn)
+	screenWidth := screen.WidthInPixels
+
 	if err := xWin.CreateChecked(
 		xuConn.RootWin(),
 		0,
 		0,
-		1960, // TODO: 動的に幅いっぱいにする
+		int(screenWidth),
 		cursorHeight,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		fillColor,
@@ -68,19 +80,9 @@ func initWindow() error {
 	}
 	xWin.Map()
 
-	// Xサーバに接続
-	xConn, err = xgb.NewConn()
-	if err != nil {
-		return err
-	}
-	xConn.Sync()
-
 	// 拡張が読み込まれているか確認する
 	extension, err := xproto.QueryExtension(xConn, uint16(len("XFIXES")), "XFIXES").Reply()
-	if err != nil {
-		return err
-	}
-	if !extension.Present {
+	if err != nil || !extension.Present {
 		return err
 	}
 
