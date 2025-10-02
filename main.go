@@ -12,64 +12,96 @@ import (
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
 
-const cursorHeight = 20
-const fillColor = 0x808080
+const (
+	cursorHeight   = 20
+	fillColor      = 0x808080
+	pollInterval   = 10 * time.Millisecond
+	opacityValue   = 0x5a000000
+	xfixesMajor    = 6
+	xfixesMinor    = 0
+	extensionXFIXES = "XFIXES"
+	atomOpacity    = "_NET_WM_WINDOW_OPACITY"
+)
 
-var xConn *xgb.Conn
-var xuConn *xgbutil.XUtil
-var xWin *xwindow.Window
+type Ruler struct {
+	xConn  *xgb.Conn
+	xuConn *xgbutil.XUtil
+	xWin   *xwindow.Window
+}
 
 func main() {
-	defer xConn.Close()
-	if err := initWindow(); err != nil {
+	ruler := &Ruler{}
+	defer ruler.Close()
+
+	if err := ruler.init(); err != nil {
 		log.Fatal(err)
 	}
 
-	for {
-		// sync cursor movement
-		{
-			// TODO: パフォーマンスの問題がある。移動時だけ実行したい
-			_, cy := getCursor(xConn)
+	ruler.run()
+}
 
-			windowID := xproto.Window(xWin.Id)
-			xproto.ConfigureWindow(xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-				[]uint32{uint32(0), uint32(cy - cursorHeight/2)})
-
-			xConn.Sync()
-		}
-
-		time.Sleep(10 * time.Millisecond)
+func (r *Ruler) Close() {
+	if r.xConn != nil {
+		r.xConn.Close()
 	}
 }
 
-func initWindow() error {
-	var err error
-	xuConn, err = xgbutil.NewConn()
-	if err != nil {
-		return err
-	}
+func (r *Ruler) run() {
+	for {
+		// sync cursor movement
+		// TODO: パフォーマンスの問題がある。移動時だけ実行したい
+		_, cy := r.getCursor()
 
-	xWin, err = xwindow.Generate(xuConn)
-	if err != nil {
-		return err
+		windowID := xproto.Window(r.xWin.Id)
+		xproto.ConfigureWindow(r.xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
+			[]uint32{0, uint32(cy - cursorHeight/2)})
+
+		r.xConn.Sync()
+
+		time.Sleep(pollInterval)
 	}
+}
+
+func (r *Ruler) init() error {
+	var err error
 
 	// Xサーバに接続
-	xConn, err = xgb.NewConn()
+	r.xuConn, err = xgbutil.NewConn()
 	if err != nil {
 		return err
 	}
-	xConn.Sync()
 
-	var screenWidth int
-	{
-		setup := xproto.Setup(xConn)
-		screen := setup.DefaultScreen(xConn)
-		screenWidth = int(screen.WidthInPixels)
+	r.xWin, err = xwindow.Generate(r.xuConn)
+	if err != nil {
+		return err
 	}
 
-	if err := xWin.CreateChecked(
-		xuConn.RootWin(),
+	r.xConn, err = xgb.NewConn()
+	if err != nil {
+		return err
+	}
+	r.xConn.Sync()
+
+	if err := r.createWindow(); err != nil {
+		return err
+	}
+
+	if err := r.setupClickThrough(); err != nil {
+		return err
+	}
+
+	if err := r.setupTransparency(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Ruler) createWindow() error {
+	screenWidth := r.getScreenWidth()
+
+	if err := r.xWin.CreateChecked(
+		r.xuConn.RootWin(),
 		0,
 		0,
 		screenWidth,
@@ -81,89 +113,90 @@ func initWindow() error {
 	); err != nil {
 		return err
 	}
-	xWin.Map()
-
-	// 拡張が読み込まれているか確認する
-	extension, err := xproto.QueryExtension(xConn, uint16(len("XFIXES")), "XFIXES").Reply()
-	if err != nil || !extension.Present {
-		return err
-	}
-
-	// ignore click
-	{
-		err = xfixes.Init(xConn)
-		if err != nil {
-			return err
-		}
-		// XFixesのバージョンを問い合わせる
-		// MEMO: 必須。なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
-		major := uint32(6)
-		minor := uint32(0)
-		_, err := xfixes.QueryVersion(xConn, major, minor).Reply()
-		if err != nil {
-			return err
-		}
-
-		region, err := xfixes.NewRegionId(xConn)
-		if err != nil {
-			return err
-		}
-		// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにする
-		cookie := xfixes.CreateRegionChecked(xConn, region, []xproto.Rectangle{xproto.Rectangle{}})
-		if err := cookie.Check(); err != nil {
-			return err
-		}
-		windowID := xproto.Window(xWin.Id)
-		cookie2 := xfixes.SetWindowShapeRegionChecked(xConn, windowID, shape.SkInput, 0, 0, region)
-		if err := cookie2.Check(); err != nil {
-			return err
-		}
-		xfixes.DestroyRegion(xConn, region)
-	}
-
-	// set transparency
-	{
-		windowID := xproto.Window(xWin.Id)
-		atom, err := xproto.InternAtom(xConn, true, uint16(len("_NET_WM_WINDOW_OPACITY")), "_NET_WM_WINDOW_OPACITY").Reply()
-		if err != nil {
-			return err
-		}
-		if err := xproto.ChangePropertyChecked(
-			xConn,
-			xproto.PropModeReplace,
-			windowID,
-			atom.Atom,
-			xproto.AtomCardinal,
-			32,
-			1,
-			[]byte{0x00, 0x00, 0x00, 0x5a}, // Goライブラリでは[]byte型だが、Cライブラリだとuint32。4バイト分必要で、足りないとエラー"slice bounds out of range"になるので埋める
-		).Check(); err != nil {
-			return err
-		}
-	}
-
-	// FIXME: カーソル移動の通知で動作させたいけど、カーソルが当たってないと通知されない
-	// クリックを邪魔しないように設定しているのと、両立できるのかわからない
-	// xevent.MotionNotifyFun(
-	// 	func(X *xgbutil.XUtil, ev xevent.MotionNotifyEvent) {
-	// 		ev = motionNotify(X, ev)
-	// 		fmt.Printf("COMPRESSED: (EventX %d, EventY %d)\n", ev.EventX, ev.EventY)
-
-	// 	}).Connect(X, win.Id)
-	// go func() {
-	// 	xevent.Main(X)
-	// }()
+	r.xWin.Map()
 
 	return nil
 }
 
-// カーソルの位置を取得
-func getCursor(conn *xgb.Conn) (int, int) {
-	// ルートウィンドウの取得
-	setup := xproto.Setup(conn)
-	root := setup.DefaultScreen(conn).Root
+func (r *Ruler) getScreenWidth() int {
+	setup := xproto.Setup(r.xConn)
+	screen := setup.DefaultScreen(r.xConn)
+	return int(screen.WidthInPixels)
+}
 
-	reply, err := xproto.QueryPointer(conn, root).Reply()
+func (r *Ruler) setupClickThrough() error {
+	// 拡張が読み込まれているか確認する
+	extension, err := xproto.QueryExtension(r.xConn, uint16(len(extensionXFIXES)), extensionXFIXES).Reply()
+	if err != nil || !extension.Present {
+		return err
+	}
+
+	if err := xfixes.Init(r.xConn); err != nil {
+		return err
+	}
+
+	// XFixesのバージョンを問い合わせる
+	// MEMO: 必須。なぜかここを実行するとCreateRegionChecked()でリクエストエラーにならなくなる
+	if _, err := xfixes.QueryVersion(r.xConn, xfixesMajor, xfixesMinor).Reply(); err != nil {
+		return err
+	}
+
+	region, err := xfixes.NewRegionId(r.xConn)
+	if err != nil {
+		return err
+	}
+	defer xfixes.DestroyRegion(r.xConn, region)
+
+	// MEMO: rectの大きさが縦横の長さが0であることが重要。これによって、描画領域がマウスクリックを邪魔しないようにする
+	if err := xfixes.CreateRegionChecked(r.xConn, region, []xproto.Rectangle{{}}).Check(); err != nil {
+		return err
+	}
+
+	windowID := xproto.Window(r.xWin.Id)
+	if err := xfixes.SetWindowShapeRegionChecked(r.xConn, windowID, shape.SkInput, 0, 0, region).Check(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *Ruler) setupTransparency() error {
+	windowID := xproto.Window(r.xWin.Id)
+	atom, err := xproto.InternAtom(r.xConn, true, uint16(len(atomOpacity)), atomOpacity).Reply()
+	if err != nil {
+		return err
+	}
+
+	// Goライブラリでは[]byte型だが、Cライブラリだとuint32。4バイト分必要で、足りないとエラー"slice bounds out of range"になるので埋める
+	opacityBytes := []byte{
+		byte((opacityValue >> 24) & 0xFF),
+		byte((opacityValue >> 16) & 0xFF),
+		byte((opacityValue >> 8) & 0xFF),
+		byte(opacityValue & 0xFF),
+	}
+
+	if err := xproto.ChangePropertyChecked(
+		r.xConn,
+		xproto.PropModeReplace,
+		windowID,
+		atom.Atom,
+		xproto.AtomCardinal,
+		32,
+		1,
+		opacityBytes,
+	).Check(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// getCursor カーソルの位置を取得
+func (r *Ruler) getCursor() (int, int) {
+	setup := xproto.Setup(r.xConn)
+	root := setup.DefaultScreen(r.xConn).Root
+
+	reply, err := xproto.QueryPointer(r.xConn, root).Reply()
 	if err != nil {
 		log.Fatal(err)
 	}
