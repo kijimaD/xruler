@@ -13,21 +13,25 @@ import (
 )
 
 const (
-	cursorHeight    = 20                    // ルーラーウィンドウの高さ（ピクセル）
-	fillColor       = 0x808080              // ルーラーの背景色（グレー）
-	pollInterval    = 10 * time.Millisecond // カーソル位置のポーリング間隔
-	opacityValue    = 0x5a000000            // ウィンドウの不透明度（35%）
-	xfixesMajor     = 6                     // XFixes拡張のメジャーバージョン
-	xfixesMinor     = 0                     // XFixes拡張のマイナーバージョン
-	extensionXFIXES = "XFIXES"              // XFixes拡張の名前
+	hideHeight      = 500                      // カーソル上下の隠す領域の高さ（ピクセル）
+	cursorHeight    = 50                       // カーソル領域の高さ（ピクセル）
+	overlayColor    = 0x000000                 // オーバーレイの色（グレー）
+	opacityPercent  = 94                       // ウィンドウの不透明度（パーセント: 0-100）
+	pollInterval    = 16 * time.Millisecond    // カーソル位置のポーリング間隔（約60fps）
+	xfixesMajor     = 6                        // XFixes拡張のメジャーバージョン
+	xfixesMinor     = 0                        // XFixes拡張のマイナーバージョン
+	extensionXFIXES = "XFIXES"                 // XFixes拡張の名前
 	atomOpacity     = "_NET_WM_WINDOW_OPACITY" // ウィンドウ不透明度を設定するアトム名
 )
 
 // Ruler X Window System上でカーソル位置を追従する水平ルーラー
 type Ruler struct {
-	xConn  *xgb.Conn        // X11プロトコル接続
-	xuConn *xgbutil.XUtil   // xgbutilユーティリティ接続
-	xWin   *xwindow.Window  // ルーラーウィンドウ
+	xConn        *xgb.Conn       // X11プロトコル接続
+	xuConn       *xgbutil.XUtil  // xgbutilユーティリティ接続
+	topWin       *xwindow.Window // 上側のオーバーレイウィンドウ
+	bottomWin    *xwindow.Window // 下側のオーバーレイウィンドウ
+	screenWidth  int             // 画面の幅
+	screenHeight int             // 画面の高さ
 }
 
 func main() {
@@ -48,19 +52,19 @@ func (r *Ruler) Close() {
 	}
 }
 
-// run メインループ：カーソル位置を追従してルーラーウィンドウを移動
+// run メインループ：カーソル位置を追従してウィンドウ位置を更新
 func (r *Ruler) run() {
+	var lastY int = -1
+
 	for {
-		// カーソル位置を同期
-		// TODO: パフォーマンスの問題がある。移動時だけ実行したい
+		// カーソル位置を取得
 		_, cy := r.getCursor()
 
-		// ウィンドウ位置を更新（カーソルの垂直中央にルーラーを配置）
-		windowID := xproto.Window(r.xWin.Id)
-		xproto.ConfigureWindow(r.xConn, windowID, xproto.ConfigWindowX|xproto.ConfigWindowY,
-			[]uint32{0, uint32(cy - cursorHeight/2)})
-
-		r.xConn.Sync()
+		// 位置が変わった時のみ更新（不要な描画を削減）
+		if cy != lastY {
+			r.updateWindows(cy)
+			lastY = cy
+		}
 
 		time.Sleep(pollInterval)
 	}
@@ -76,12 +80,6 @@ func (r *Ruler) init() error {
 		return err
 	}
 
-	// ウィンドウIDを生成
-	r.xWin, err = xwindow.Generate(r.xuConn)
-	if err != nil {
-		return err
-	}
-
 	// X11プロトコル接続を確立
 	r.xConn, err = xgb.NewConn()
 	if err != nil {
@@ -89,8 +87,11 @@ func (r *Ruler) init() error {
 	}
 	r.xConn.Sync()
 
-	// ルーラーウィンドウを作成
-	if err := r.createWindow(); err != nil {
+	// 画面サイズを取得
+	r.screenWidth, r.screenHeight = r.getScreenSize()
+
+	// 上下2つのウィンドウを作成
+	if err := r.createWindows(); err != nil {
 		return err
 	}
 
@@ -99,7 +100,7 @@ func (r *Ruler) init() error {
 		return err
 	}
 
-	// 透過設定
+	// 透明度を設定
 	if err := r.setupTransparency(); err != nil {
 		return err
 	}
@@ -107,34 +108,57 @@ func (r *Ruler) init() error {
 	return nil
 }
 
-// createWindow ルーラーウィンドウを作成して表示
-func (r *Ruler) createWindow() error {
-	screenWidth := r.getScreenWidth()
+// createWindows 上下2つのオーバーレイウィンドウを作成
+func (r *Ruler) createWindows() error {
+	var err error
 
-	// 画面全体の幅を持つウィンドウを作成
-	if err := r.xWin.CreateChecked(
+	// 上側のウィンドウを作成
+	r.topWin, err = xwindow.Generate(r.xuConn)
+	if err != nil {
+		return err
+	}
+
+	if err := r.topWin.CreateChecked(
 		r.xuConn.RootWin(),
-		0,
-		0,
-		screenWidth,
-		cursorHeight,
-		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
-		fillColor,
-		1, // OverrideRedirect: ウィンドウマネージャの制御を受けない
-		xproto.EventMaskPointerMotion,
+		0, 0, // 初期位置
+		r.screenWidth, 1, // 初期サイズ（高さは後で更新）
+		xproto.CwBackPixel|xproto.CwOverrideRedirect,
+		overlayColor,
+		1, // OverrideRedirect
 	); err != nil {
 		return err
 	}
-	r.xWin.Map()
+
+	// 下側のウィンドウを作成
+	r.bottomWin, err = xwindow.Generate(r.xuConn)
+	if err != nil {
+		return err
+	}
+
+	if err := r.bottomWin.CreateChecked(
+		r.xuConn.RootWin(),
+		0, 0, // 初期位置
+		r.screenWidth, 1, // 初期サイズ（高さは後で更新）
+		xproto.CwBackPixel|xproto.CwOverrideRedirect,
+		overlayColor,
+		1, // OverrideRedirect
+	); err != nil {
+		return err
+	}
+
+	// ウィンドウを表示
+	r.topWin.Map()
+	r.bottomWin.Map()
+	r.xConn.Sync()
 
 	return nil
 }
 
-// getScreenWidth 画面の幅（ピクセル）を取得
-func (r *Ruler) getScreenWidth() int {
+// getScreenSize 画面のサイズ（幅、高さ）を取得
+func (r *Ruler) getScreenSize() (int, int) {
 	setup := xproto.Setup(r.xConn)
 	screen := setup.DefaultScreen(r.xConn)
-	return int(screen.WidthInPixels)
+	return int(screen.WidthInPixels), int(screen.HeightInPixels)
 }
 
 // setupClickThrough クリックスルーを設定（ルーラーがマウス操作を邪魔しないようにする）
@@ -168,9 +192,14 @@ func (r *Ruler) setupClickThrough() error {
 		return err
 	}
 
-	// ウィンドウの入力シェイプをこのリージョンに設定
-	windowID := xproto.Window(r.xWin.Id)
-	if err := xfixes.SetWindowShapeRegionChecked(r.xConn, windowID, shape.SkInput, 0, 0, region).Check(); err != nil {
+	// 両方のウィンドウの入力シェイプをこのリージョンに設定
+	topID := xproto.Window(r.topWin.Id)
+	if err := xfixes.SetWindowShapeRegionChecked(r.xConn, topID, shape.SkInput, 0, 0, region).Check(); err != nil {
+		return err
+	}
+
+	bottomID := xproto.Window(r.bottomWin.Id)
+	if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomID, shape.SkInput, 0, 0, region).Check(); err != nil {
 		return err
 	}
 
@@ -179,28 +208,46 @@ func (r *Ruler) setupClickThrough() error {
 
 // setupTransparency ウィンドウの透明度を設定
 func (r *Ruler) setupTransparency() error {
-	windowID := xproto.Window(r.xWin.Id)
-
 	// _NET_WM_WINDOW_OPACITYアトムを取得
 	atom, err := xproto.InternAtom(r.xConn, true, uint16(len(atomOpacity)), atomOpacity).Reply()
 	if err != nil {
 		return err
 	}
 
-	// uint32値をビッグエンディアンのバイト列に変換
-	// Goライブラリでは[]byte型だが、Xプロトコルではuint32として扱われる
+	// 不透明度を計算（0xFFFFFFFF = 完全不透明）
+	maxOpacity := float64(uint32(0xFFFFFFFF))
+	opacity := float64(opacityPercent) / 100.0 * maxOpacity
+	opacityValue := uint32(opacity)
+
+	// uint32値をリトルエンディアンのバイト列に変換
 	opacityBytes := []byte{
-		byte((opacityValue >> 24) & 0xFF),
-		byte((opacityValue >> 16) & 0xFF),
-		byte((opacityValue >> 8) & 0xFF),
 		byte(opacityValue & 0xFF),
+		byte((opacityValue >> 8) & 0xFF),
+		byte((opacityValue >> 16) & 0xFF),
+		byte((opacityValue >> 24) & 0xFF),
 	}
 
-	// ウィンドウプロパティに不透明度を設定
+	// 上側のウィンドウに不透明度を設定
+	topID := xproto.Window(r.topWin.Id)
 	if err := xproto.ChangePropertyChecked(
 		r.xConn,
 		xproto.PropModeReplace,
-		windowID,
+		topID,
+		atom.Atom,
+		xproto.AtomCardinal,
+		32, // 32ビット値
+		1,  // 1要素
+		opacityBytes,
+	).Check(); err != nil {
+		return err
+	}
+
+	// 下側のウィンドウに不透明度を設定
+	bottomID := xproto.Window(r.bottomWin.Id)
+	if err := xproto.ChangePropertyChecked(
+		r.xConn,
+		xproto.PropModeReplace,
+		bottomID,
 		atom.Atom,
 		xproto.AtomCardinal,
 		32, // 32ビット値
@@ -226,4 +273,39 @@ func (r *Ruler) getCursor() (int, int) {
 	}
 
 	return int(reply.RootX), int(reply.RootY)
+}
+
+// updateWindows カーソル位置に応じてウィンドウの位置とサイズを更新
+func (r *Ruler) updateWindows(cursorY int) {
+	// カーソル領域の中心を基準に計算
+	cursorTop := cursorY - cursorHeight/2
+	cursorBottom := cursorY + cursorHeight/2
+
+	// 上側の隠す領域: (cursorTop - hideHeight) ～ cursorTop
+	topStart := max(0, cursorTop-hideHeight)
+	topEnd := cursorTop
+	topHeight := topEnd - topStart
+
+	// 下側の隠す領域: cursorBottom ～ (cursorBottom + hideHeight)
+	bottomStart := cursorBottom
+	bottomEnd := min(r.screenHeight, cursorBottom+hideHeight)
+	bottomHeight := bottomEnd - bottomStart
+
+	// 上側のウィンドウを更新
+	if topHeight > 0 {
+		topID := xproto.Window(r.topWin.Id)
+		xproto.ConfigureWindow(r.xConn, topID,
+			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
+			[]uint32{0, uint32(topStart), uint32(r.screenWidth), uint32(topHeight)})
+	}
+
+	// 下側のウィンドウを更新
+	if bottomHeight > 0 {
+		bottomID := xproto.Window(r.bottomWin.Id)
+		xproto.ConfigureWindow(r.xConn, bottomID,
+			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
+			[]uint32{0, uint32(bottomStart), uint32(r.screenWidth), uint32(bottomHeight)})
+	}
+
+	r.xConn.Sync()
 }
