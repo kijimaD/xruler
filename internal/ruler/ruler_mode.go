@@ -17,9 +17,9 @@ type RulerModeConfig struct {
 // DefaultRulerModeConfig デフォルトのルーラーモード設定
 func DefaultRulerModeConfig() RulerModeConfig {
 	return RulerModeConfig{
-		RulerHeight:    40,
+		RulerHeight:    60,
 		RulerColor:     0x808080,
-		OpacityPercent: 94,
+		OpacityPercent: 50,
 	}
 }
 
