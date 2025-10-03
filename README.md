@@ -1,6 +1,8 @@
 Screen ruler running on X Window System.
 
-![](demo.gif)
+![](demo_ruler.png)
+
+![](demo_hide.png)
 
 ## Installation
 
