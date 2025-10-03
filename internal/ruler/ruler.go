@@ -22,75 +22,23 @@ const (
 	atomOpacity     = "_NET_WM_WINDOW_OPACITY" // ウィンドウ不透明度を設定するアトム名
 )
 
-// HideModeConfig 隠すモードの設定
-type HideModeConfig struct {
-	HideHeight     int     // カーソル上下の隠す領域の高さ（ピクセル）
-	CursorHeight   int     // カーソル領域の高さ（ピクセル）
-	BorderHeight   int     // 枠線の高さ（ピクセル）
-	OverlayColor   uint32  // オーバーレイの色
-	BorderColor    uint32  // 枠線の色
-	OpacityPercent float64 // ウィンドウの不透明度（パーセント: 0-100）
-}
-
-// RulerModeConfig ルーラーモードの設定
-type RulerModeConfig struct {
-	RulerHeight    int     // ルーラーの高さ（ピクセル）
-	RulerColor     uint32  // ルーラーの色
-	OpacityPercent float64 // ウィンドウの不透明度（パーセント: 0-100）
-}
-
-// DefaultHideModeConfig デフォルトの隠すモード設定
-func DefaultHideModeConfig() HideModeConfig {
-	return HideModeConfig{
-		HideHeight:     200,
-		CursorHeight:   50,
-		BorderHeight:   2,
-		OverlayColor:   0xf0f0f0,
-		BorderColor:    0x000000,
-		OpacityPercent: 94,
-	}
-}
-
-// DefaultRulerModeConfig デフォルトのルーラーモード設定
-func DefaultRulerModeConfig() RulerModeConfig {
-	return RulerModeConfig{
-		RulerHeight:    40,
-		RulerColor:     0x808080,
-		OpacityPercent: 94,
-	}
-}
-
-// Mode 動作モード
-type Mode int
-
-const (
-	ModeHide  Mode = iota // 隠すモード（上下を暗くする）
-	ModeRuler             // ルーラーモード（半透明の線を表示）
-)
 
 // Ruler X Window System上でカーソル位置を追従する水平ルーラー
 type Ruler struct {
-	xConn           *xgb.Conn       // X11プロトコル接続
-	xuConn          *xgbutil.XUtil  // xgbutilユーティリティ接続
-	topWin          *xwindow.Window // 上側のオーバーレイウィンドウ
-	topBorderWin    *xwindow.Window // 上側の枠線ウィンドウ（隠すモードのみ）
-	bottomBorderWin *xwindow.Window // 下側の枠線ウィンドウ（隠すモードのみ）
-	bottomWin       *xwindow.Window // 下側のオーバーレイウィンドウ（またはルーラーウィンドウ）
-	screenWidth     int             // 画面の幅
-	screenHeight    int             // 画面の高さ
-	mode            Mode            // 動作モード
-	visible         bool            // 表示状態
-	hideConfig      HideModeConfig  // 隠すモードの設定
-	rulerConfig     RulerModeConfig // ルーラーモードの設定
+	xConn        *xgb.Conn         // X11プロトコル接続
+	xuConn       *xgbutil.XUtil    // xgbutilユーティリティ接続
+	windows      []*xwindow.Window // ウィンドウリスト
+	screenWidth  int               // 画面の幅
+	screenHeight int               // 画面の高さ
+	mode         Mode              // 動作モード
+	visible      bool              // 表示状態
 }
 
 // New ルーラーを作成
 func New(mode Mode) *Ruler {
 	return &Ruler{
-		mode:        mode,
-		visible:     true,
-		hideConfig:  DefaultHideModeConfig(),
-		rulerConfig: DefaultRulerModeConfig(),
+		mode:    mode,
+		visible: true,
 	}
 }
 
@@ -114,11 +62,7 @@ func (r *Ruler) Run() {
 		// 位置が変わった時のみ更新（不要な描画を削減）
 		if cy != lastY {
 			if r.visible {
-				if r.mode == ModeHide {
-					r.updateWindowsHideMode(cy)
-				} else {
-					r.updateWindowsRulerMode(cy)
-				}
+				r.mode.UpdateWindows(r.xConn, r.windows, cy, r.screenWidth, r.screenHeight)
 			}
 			lastY = cy
 		}
@@ -195,27 +139,13 @@ func (r *Ruler) toggleVisibility() {
 	r.visible = !r.visible
 
 	if r.visible {
-		r.topWin.Map()
-		if r.topBorderWin != nil {
-			r.topBorderWin.Map()
-		}
-		if r.bottomBorderWin != nil {
-			r.bottomBorderWin.Map()
-		}
-		if r.bottomWin != nil {
-			r.bottomWin.Map()
+		for _, win := range r.windows {
+			win.Map()
 		}
 		log.Println("ルーラー表示: ON")
 	} else {
-		r.topWin.Unmap()
-		if r.topBorderWin != nil {
-			r.topBorderWin.Unmap()
-		}
-		if r.bottomBorderWin != nil {
-			r.bottomBorderWin.Unmap()
-		}
-		if r.bottomWin != nil {
-			r.bottomWin.Unmap()
+		for _, win := range r.windows {
+			win.Unmap()
 		}
 		log.Println("ルーラー表示: OFF")
 	}
@@ -224,95 +154,9 @@ func (r *Ruler) toggleVisibility() {
 func (r *Ruler) createWindows() error {
 	var err error
 
-	if r.mode == ModeHide {
-		// 隠すモード：上下2つのウィンドウ + 2つの枠線ウィンドウ
-		r.topWin, err = xwindow.Generate(r.xuConn)
-		if err != nil {
-			return err
-		}
-
-		if err := r.topWin.CreateChecked(
-			r.xuConn.RootWin(),
-			0, 0,
-			r.screenWidth, 1,
-			xproto.CwBackPixel|xproto.CwOverrideRedirect,
-			r.hideConfig.OverlayColor,
-			1,
-		); err != nil {
-			return err
-		}
-
-		r.topBorderWin, err = xwindow.Generate(r.xuConn)
-		if err != nil {
-			return err
-		}
-
-		if err := r.topBorderWin.CreateChecked(
-			r.xuConn.RootWin(),
-			0, 0,
-			r.screenWidth, r.hideConfig.BorderHeight,
-			xproto.CwBackPixel|xproto.CwOverrideRedirect,
-			r.hideConfig.BorderColor,
-			1,
-		); err != nil {
-			return err
-		}
-
-		r.bottomBorderWin, err = xwindow.Generate(r.xuConn)
-		if err != nil {
-			return err
-		}
-
-		if err := r.bottomBorderWin.CreateChecked(
-			r.xuConn.RootWin(),
-			0, 0,
-			r.screenWidth, r.hideConfig.BorderHeight,
-			xproto.CwBackPixel|xproto.CwOverrideRedirect,
-			r.hideConfig.BorderColor,
-			1,
-		); err != nil {
-			return err
-		}
-
-		r.bottomWin, err = xwindow.Generate(r.xuConn)
-		if err != nil {
-			return err
-		}
-
-		if err := r.bottomWin.CreateChecked(
-			r.xuConn.RootWin(),
-			0, 0,
-			r.screenWidth, 1,
-			xproto.CwBackPixel|xproto.CwOverrideRedirect,
-			r.hideConfig.OverlayColor,
-			1,
-		); err != nil {
-			return err
-		}
-
-		r.topWin.Map()
-		r.topBorderWin.Map()
-		r.bottomBorderWin.Map()
-		r.bottomWin.Map()
-	} else {
-		// ルーラーモード：1つの水平線
-		r.topWin, err = xwindow.Generate(r.xuConn)
-		if err != nil {
-			return err
-		}
-
-		if err := r.topWin.CreateChecked(
-			r.xuConn.RootWin(),
-			0, 0,
-			r.screenWidth, r.rulerConfig.RulerHeight,
-			xproto.CwBackPixel|xproto.CwOverrideRedirect,
-			r.rulerConfig.RulerColor,
-			1,
-		); err != nil {
-			return err
-		}
-
-		r.topWin.Map()
+	r.windows, err = r.mode.CreateWindows(r.xuConn, r.screenWidth, r.screenHeight)
+	if err != nil {
+		return err
 	}
 
 	r.xConn.Sync()
@@ -349,29 +193,10 @@ func (r *Ruler) setupClickThrough() error {
 		return err
 	}
 
-	topID := xproto.Window(r.topWin.Id)
-	if err := xfixes.SetWindowShapeRegionChecked(r.xConn, topID, shape.SkInput, 0, 0, region).Check(); err != nil {
-		return err
-	}
-
-	if r.mode == ModeHide {
-		if r.topBorderWin != nil {
-			topBorderID := xproto.Window(r.topBorderWin.Id)
-			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, topBorderID, shape.SkInput, 0, 0, region).Check(); err != nil {
-				return err
-			}
-		}
-		if r.bottomBorderWin != nil {
-			bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
-			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomBorderID, shape.SkInput, 0, 0, region).Check(); err != nil {
-				return err
-			}
-		}
-		if r.bottomWin != nil {
-			bottomID := xproto.Window(r.bottomWin.Id)
-			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomID, shape.SkInput, 0, 0, region).Check(); err != nil {
-				return err
-			}
+	for _, win := range r.windows {
+		winID := xproto.Window(win.Id)
+		if err := xfixes.SetWindowShapeRegionChecked(r.xConn, winID, shape.SkInput, 0, 0, region).Check(); err != nil {
+			return err
 		}
 	}
 
@@ -384,13 +209,7 @@ func (r *Ruler) setupTransparency() error {
 		return err
 	}
 
-	var opacityPercent float64
-	if r.mode == ModeHide {
-		opacityPercent = r.hideConfig.OpacityPercent
-	} else {
-		opacityPercent = r.rulerConfig.OpacityPercent
-	}
-
+	opacityPercent := r.mode.GetOpacity()
 	maxOpacity := float64(uint32(0xFFFFFFFF))
 	opacity := opacityPercent / 100.0 * maxOpacity
 	opacityValue := uint32(opacity)
@@ -402,65 +221,19 @@ func (r *Ruler) setupTransparency() error {
 		byte((opacityValue >> 24) & 0xFF),
 	}
 
-	topID := xproto.Window(r.topWin.Id)
-	if err := xproto.ChangePropertyChecked(
-		r.xConn,
-		xproto.PropModeReplace,
-		topID,
-		atom.Atom,
-		xproto.AtomCardinal,
-		32,
-		1,
-		opacityBytes,
-	).Check(); err != nil {
-		return err
-	}
-
-	if r.mode == ModeHide {
-		if r.topBorderWin != nil {
-			topBorderID := xproto.Window(r.topBorderWin.Id)
-			if err := xproto.ChangePropertyChecked(
-				r.xConn,
-				xproto.PropModeReplace,
-				topBorderID,
-				atom.Atom,
-				xproto.AtomCardinal,
-				32,
-				1,
-				opacityBytes,
-			).Check(); err != nil {
-				return err
-			}
-		}
-		if r.bottomBorderWin != nil {
-			bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
-			if err := xproto.ChangePropertyChecked(
-				r.xConn,
-				xproto.PropModeReplace,
-				bottomBorderID,
-				atom.Atom,
-				xproto.AtomCardinal,
-				32,
-				1,
-				opacityBytes,
-			).Check(); err != nil {
-				return err
-			}
-		}
-		if r.bottomWin != nil {
-			bottomID := xproto.Window(r.bottomWin.Id)
-			if err := xproto.ChangePropertyChecked(
-				r.xConn,
-				xproto.PropModeReplace,
-				bottomID,
-				atom.Atom,
-				xproto.AtomCardinal,
-				32,
-				1,
-				opacityBytes,
-			).Check(); err != nil {
-				return err
-			}
+	for _, win := range r.windows {
+		winID := xproto.Window(win.Id)
+		if err := xproto.ChangePropertyChecked(
+			r.xConn,
+			xproto.PropModeReplace,
+			winID,
+			atom.Atom,
+			xproto.AtomCardinal,
+			32,
+			1,
+			opacityBytes,
+		).Check(); err != nil {
+			return err
 		}
 	}
 
@@ -479,56 +252,3 @@ func (r *Ruler) getCursor() (int, int) {
 	return int(reply.RootX), int(reply.RootY)
 }
 
-func (r *Ruler) updateWindowsHideMode(cursorY int) {
-	cursorTop := cursorY - r.hideConfig.CursorHeight/2
-	cursorBottom := cursorY + r.hideConfig.CursorHeight/2
-
-	topStart := max(0, cursorTop-r.hideConfig.HideHeight)
-	topEnd := cursorTop
-	topHeight := topEnd - topStart
-
-	bottomStart := cursorBottom
-	bottomEnd := min(r.screenHeight, cursorBottom+r.hideConfig.HideHeight)
-	bottomHeight := bottomEnd - bottomStart
-
-	if topHeight > 0 {
-		topID := xproto.Window(r.topWin.Id)
-		xproto.ConfigureWindow(r.xConn, topID,
-			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(topStart), uint32(r.screenWidth), uint32(topHeight)})
-	}
-
-	if r.topBorderWin != nil {
-		topBorderID := xproto.Window(r.topBorderWin.Id)
-		xproto.ConfigureWindow(r.xConn, topBorderID,
-			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(cursorTop), uint32(r.screenWidth), uint32(r.hideConfig.BorderHeight)})
-	}
-
-	if r.bottomBorderWin != nil {
-		bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
-		xproto.ConfigureWindow(r.xConn, bottomBorderID,
-			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(cursorBottom - r.hideConfig.BorderHeight), uint32(r.screenWidth), uint32(r.hideConfig.BorderHeight)})
-	}
-
-	if bottomHeight > 0 {
-		bottomID := xproto.Window(r.bottomWin.Id)
-		xproto.ConfigureWindow(r.xConn, bottomID,
-			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(bottomStart), uint32(r.screenWidth), uint32(bottomHeight)})
-	}
-
-	r.xConn.Sync()
-}
-
-func (r *Ruler) updateWindowsRulerMode(cursorY int) {
-	rulerY := cursorY - r.rulerConfig.RulerHeight/2
-
-	topID := xproto.Window(r.topWin.Id)
-	xproto.ConfigureWindow(r.xConn, topID,
-		xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-		[]uint32{0, uint32(rulerY), uint32(r.screenWidth), uint32(r.rulerConfig.RulerHeight)})
-
-	r.xConn.Sync()
-}

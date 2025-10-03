@@ -31,9 +31,9 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	var mode ruler.Mode
 	switch modeStr {
 	case "hide":
-		mode = ruler.ModeHide
+		mode = ruler.DefaultHideModeConfig()
 	case "ruler":
-		mode = ruler.ModeRuler
+		mode = ruler.DefaultRulerModeConfig()
 	default:
 		return cli.Exit("Error: Invalid mode '"+modeStr+"'. Use 'hide' or 'ruler'.", 1)
 	}
