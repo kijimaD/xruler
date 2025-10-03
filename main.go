@@ -12,14 +12,18 @@ import (
 	"github.com/BurntSushi/xgb/xfixes"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
+	"github.com/BurntSushi/xgbutil/keybind"
+	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
 )
 
 const (
-	hideHeight      = 500                      // カーソル上下の隠す領域の高さ（ピクセル）
+	hideHeight      = 200                      // カーソル上下の隠す領域の高さ（ピクセル）
 	cursorHeight    = 50                       // カーソル領域の高さ（ピクセル）
 	rulerHeight     = 40                       // ルーラーモードの高さ（ピクセル）
-	overlayColor    = 0x000000                 // オーバーレイの色（黒）
+	borderHeight    = 2                        // 枠線の高さ（ピクセル）
+	overlayColor    = 0xf0f0f0                 // オーバーレイの色（黒）
+	borderColor     = 0x000000                 // 枠線の色（黒）
 	rulerColor      = 0x808080                 // ルーラーの色（グレー）
 	opacityPercent  = 94                       // ウィンドウの不透明度（パーセント: 0-100）
 	pollInterval    = 16 * time.Millisecond    // カーソル位置のポーリング間隔（約60fps）
@@ -39,13 +43,16 @@ const (
 
 // Ruler X Window System上でカーソル位置を追従する水平ルーラー
 type Ruler struct {
-	xConn        *xgb.Conn       // X11プロトコル接続
-	xuConn       *xgbutil.XUtil  // xgbutilユーティリティ接続
-	topWin       *xwindow.Window // 上側のオーバーレイウィンドウ
-	bottomWin    *xwindow.Window // 下側のオーバーレイウィンドウ（またはルーラーウィンドウ）
-	screenWidth  int             // 画面の幅
-	screenHeight int             // 画面の高さ
-	mode         Mode            // 動作モード
+	xConn           *xgb.Conn       // X11プロトコル接続
+	xuConn          *xgbutil.XUtil  // xgbutilユーティリティ接続
+	topWin          *xwindow.Window // 上側のオーバーレイウィンドウ
+	topBorderWin    *xwindow.Window // 上側の枠線ウィンドウ（隠すモードのみ）
+	bottomBorderWin *xwindow.Window // 下側の枠線ウィンドウ（隠すモードのみ）
+	bottomWin       *xwindow.Window // 下側のオーバーレイウィンドウ（またはルーラーウィンドウ）
+	screenWidth     int             // 画面の幅
+	screenHeight    int             // 画面の高さ
+	mode            Mode            // 動作モード
+	visible         bool            // 表示状態
 }
 
 func main() {
@@ -75,10 +82,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	ruler := &Ruler{mode: mode}
+	ruler := &Ruler{mode: mode, visible: true}
 	defer ruler.Close()
 
 	if err := ruler.init(); err != nil {
+		log.Fatal(err)
+	}
+
+	// キーボードイベントの設定
+	if err := ruler.setupKeyboard(); err != nil {
 		log.Fatal(err)
 	}
 
@@ -96,16 +108,20 @@ func (r *Ruler) Close() {
 func (r *Ruler) run() {
 	var lastY int = -1
 
+	go xevent.Main(r.xuConn)
+
 	for {
 		// カーソル位置を取得
 		_, cy := r.getCursor()
 
 		// 位置が変わった時のみ更新（不要な描画を削減）
 		if cy != lastY {
-			if r.mode == ModeHide {
-				r.updateWindowsHideMode(cy)
-			} else {
-				r.updateWindowsRulerMode(cy)
+			if r.visible {
+				if r.mode == ModeHide {
+					r.updateWindowsHideMode(cy)
+				} else {
+					r.updateWindowsRulerMode(cy)
+				}
 			}
 			lastY = cy
 		}
@@ -152,12 +168,63 @@ func (r *Ruler) init() error {
 	return nil
 }
 
+// setupKeyboard キーボードイベントを設定
+func (r *Ruler) setupKeyboard() error {
+	// keybindを初期化
+	keybind.Initialize(r.xuConn)
+
+	// ルートウィンドウでグローバルにキーをキャプチャ
+	err := keybind.KeyPressFun(
+		func(X *xgbutil.XUtil, e xevent.KeyPressEvent) {
+			r.toggleVisibility()
+		}).Connect(r.xuConn, r.xuConn.RootWin(), "Control-Shift-space", true)
+
+	if err != nil {
+		return err
+	}
+
+	log.Println("キーバインド設定完了: Ctrl+Shift+Space でトグル")
+
+	return nil
+}
+
+// toggleVisibility 表示状態を切り替え
+func (r *Ruler) toggleVisibility() {
+	r.visible = !r.visible
+
+	if r.visible {
+		r.topWin.Map()
+		if r.topBorderWin != nil {
+			r.topBorderWin.Map()
+		}
+		if r.bottomBorderWin != nil {
+			r.bottomBorderWin.Map()
+		}
+		if r.bottomWin != nil {
+			r.bottomWin.Map()
+		}
+		log.Println("ルーラー表示: ON")
+	} else {
+		r.topWin.Unmap()
+		if r.topBorderWin != nil {
+			r.topBorderWin.Unmap()
+		}
+		if r.bottomBorderWin != nil {
+			r.bottomBorderWin.Unmap()
+		}
+		if r.bottomWin != nil {
+			r.bottomWin.Unmap()
+		}
+		log.Println("ルーラー表示: OFF")
+	}
+}
+
 // createWindows ウィンドウを作成
 func (r *Ruler) createWindows() error {
 	var err error
 
 	if r.mode == ModeHide {
-		// 隠すモード：上下2つのウィンドウ
+		// 隠すモード：上下2つのウィンドウ + 2つの枠線ウィンドウ
 		r.topWin, err = xwindow.Generate(r.xuConn)
 		if err != nil {
 			return err
@@ -169,6 +236,38 @@ func (r *Ruler) createWindows() error {
 			r.screenWidth, 1,
 			xproto.CwBackPixel|xproto.CwOverrideRedirect,
 			overlayColor,
+			1,
+		); err != nil {
+			return err
+		}
+
+		r.topBorderWin, err = xwindow.Generate(r.xuConn)
+		if err != nil {
+			return err
+		}
+
+		if err := r.topBorderWin.CreateChecked(
+			r.xuConn.RootWin(),
+			0, 0,
+			r.screenWidth, borderHeight,
+			xproto.CwBackPixel|xproto.CwOverrideRedirect,
+			borderColor,
+			1,
+		); err != nil {
+			return err
+		}
+
+		r.bottomBorderWin, err = xwindow.Generate(r.xuConn)
+		if err != nil {
+			return err
+		}
+
+		if err := r.bottomBorderWin.CreateChecked(
+			r.xuConn.RootWin(),
+			0, 0,
+			r.screenWidth, borderHeight,
+			xproto.CwBackPixel|xproto.CwOverrideRedirect,
+			borderColor,
 			1,
 		); err != nil {
 			return err
@@ -191,6 +290,8 @@ func (r *Ruler) createWindows() error {
 		}
 
 		r.topWin.Map()
+		r.topBorderWin.Map()
+		r.bottomBorderWin.Map()
 		r.bottomWin.Map()
 	} else {
 		// ルーラーモード：1つの水平線
@@ -261,10 +362,24 @@ func (r *Ruler) setupClickThrough() error {
 		return err
 	}
 
-	if r.mode == ModeHide && r.bottomWin != nil {
-		bottomID := xproto.Window(r.bottomWin.Id)
-		if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomID, shape.SkInput, 0, 0, region).Check(); err != nil {
-			return err
+	if r.mode == ModeHide {
+		if r.topBorderWin != nil {
+			topBorderID := xproto.Window(r.topBorderWin.Id)
+			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, topBorderID, shape.SkInput, 0, 0, region).Check(); err != nil {
+				return err
+			}
+		}
+		if r.bottomBorderWin != nil {
+			bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
+			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomBorderID, shape.SkInput, 0, 0, region).Check(); err != nil {
+				return err
+			}
+		}
+		if r.bottomWin != nil {
+			bottomID := xproto.Window(r.bottomWin.Id)
+			if err := xfixes.SetWindowShapeRegionChecked(r.xConn, bottomID, shape.SkInput, 0, 0, region).Check(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -307,20 +422,52 @@ func (r *Ruler) setupTransparency() error {
 		return err
 	}
 
-	// 隠すモードの場合、下側のウィンドウにも設定
-	if r.mode == ModeHide && r.bottomWin != nil {
-		bottomID := xproto.Window(r.bottomWin.Id)
-		if err := xproto.ChangePropertyChecked(
-			r.xConn,
-			xproto.PropModeReplace,
-			bottomID,
-			atom.Atom,
-			xproto.AtomCardinal,
-			32,
-			1,
-			opacityBytes,
-		).Check(); err != nil {
-			return err
+	// 隠すモードの場合、枠線と下側のウィンドウにも設定
+	if r.mode == ModeHide {
+		if r.topBorderWin != nil {
+			topBorderID := xproto.Window(r.topBorderWin.Id)
+			if err := xproto.ChangePropertyChecked(
+				r.xConn,
+				xproto.PropModeReplace,
+				topBorderID,
+				atom.Atom,
+				xproto.AtomCardinal,
+				32,
+				1,
+				opacityBytes,
+			).Check(); err != nil {
+				return err
+			}
+		}
+		if r.bottomBorderWin != nil {
+			bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
+			if err := xproto.ChangePropertyChecked(
+				r.xConn,
+				xproto.PropModeReplace,
+				bottomBorderID,
+				atom.Atom,
+				xproto.AtomCardinal,
+				32,
+				1,
+				opacityBytes,
+			).Check(); err != nil {
+				return err
+			}
+		}
+		if r.bottomWin != nil {
+			bottomID := xproto.Window(r.bottomWin.Id)
+			if err := xproto.ChangePropertyChecked(
+				r.xConn,
+				xproto.PropModeReplace,
+				bottomID,
+				atom.Atom,
+				xproto.AtomCardinal,
+				32,
+				1,
+				opacityBytes,
+			).Check(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -364,6 +511,22 @@ func (r *Ruler) updateWindowsHideMode(cursorY int) {
 		xproto.ConfigureWindow(r.xConn, topID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
 			[]uint32{0, uint32(topStart), uint32(r.screenWidth), uint32(topHeight)})
+	}
+
+	// 上側の枠線ウィンドウを更新（カーソル領域の上端）
+	if r.topBorderWin != nil {
+		topBorderID := xproto.Window(r.topBorderWin.Id)
+		xproto.ConfigureWindow(r.xConn, topBorderID,
+			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
+			[]uint32{0, uint32(cursorTop), uint32(r.screenWidth), borderHeight})
+	}
+
+	// 下側の枠線ウィンドウを更新（カーソル領域の下端）
+	if r.bottomBorderWin != nil {
+		bottomBorderID := xproto.Window(r.bottomBorderWin.Id)
+		xproto.ConfigureWindow(r.xConn, bottomBorderID,
+			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
+			[]uint32{0, uint32(cursorBottom - borderHeight), uint32(r.screenWidth), borderHeight})
 	}
 
 	// 下側のウィンドウを更新
