@@ -12,6 +12,7 @@ import (
 	"github.com/BurntSushi/xgbutil/keybind"
 	"github.com/BurntSushi/xgbutil/xevent"
 	"github.com/BurntSushi/xgbutil/xwindow"
+	"github.com/kijimaD/xruler/internal/trail"
 )
 
 const (
@@ -22,7 +23,6 @@ const (
 	atomOpacity     = "_NET_WM_WINDOW_OPACITY" // ウィンドウ不透明度を設定するアトム名
 )
 
-
 // Ruler X Window System上でカーソル位置を追従する水平ルーラー
 type Ruler struct {
 	xConn        *xgb.Conn         // X11プロトコル接続
@@ -32,6 +32,7 @@ type Ruler struct {
 	screenHeight int               // 画面の高さ
 	mode         Mode              // 動作モード
 	visible      bool              // 表示状態
+	trailMgr     *trail.Manager    // 軌跡管理
 }
 
 // New ルーラーを作成
@@ -57,7 +58,7 @@ func (r *Ruler) Run() {
 
 	for {
 		// カーソル位置を取得
-		_, cy := r.getCursor()
+		cx, cy := r.getCursor()
 
 		// 位置が変わった時のみ更新（不要な描画を削減）
 		if cy != lastY {
@@ -67,6 +68,18 @@ func (r *Ruler) Run() {
 			lastY = cy
 		}
 
+		// カーソルが移動したら軌跡を追加
+		lastX, lastY := r.trailMgr.GetLastPosition()
+		if cx != lastX || cy != lastY {
+			if r.visible && lastX != -1 && lastY != -1 {
+				if r.trailMgr.ShouldAdd(cx, cy) {
+					r.trailMgr.Add(lastX, lastY, cx, cy)
+				}
+			}
+			r.trailMgr.UpdatePosition(cx, cy)
+		}
+
+		r.trailMgr.Update()
 		time.Sleep(PollInterval)
 	}
 }
@@ -90,6 +103,9 @@ func (r *Ruler) Init() error {
 
 	// 画面サイズを取得
 	r.screenWidth, r.screenHeight = r.getScreenSize()
+
+	// 軌跡マネージャを初期化
+	r.trailMgr = trail.NewManager(r.xConn, r.xuConn)
 
 	// 上下2つのウィンドウを作成
 	if err := r.createWindows(); err != nil {
