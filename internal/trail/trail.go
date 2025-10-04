@@ -15,7 +15,7 @@ import (
 const (
 	Duration    = 2 * time.Second // 軌跡の表示時間
 	MinDistance = 1               // 軌跡を追加する最小移動距離（ピクセル）
-	LineWidth   = 3               // 軌跡の線の太さ
+	LineWidth   = 8               // 軌跡の線の太さ
 	Color       = 0xFF0000        // 軌跡の色（赤）
 	atomOpacity = "_NET_WM_WINDOW_OPACITY"
 )
@@ -31,11 +31,11 @@ type Segment struct {
 
 // Manager 軌跡管理
 type Manager struct {
-	xConn   *xgb.Conn
-	xuConn  *xgbutil.XUtil
-	trails  []*Segment
-	lastX   int
-	lastY   int
+	xConn  *xgb.Conn
+	xuConn *xgbutil.XUtil
+	trails []*Segment
+	lastX  int
+	lastY  int
 }
 
 // NewManager 軌跡マネージャを作成
@@ -85,7 +85,7 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 		minX, minY,
 		width, height,
 		xproto.CwBackPixel|xproto.CwOverrideRedirect,
-		0x000000, // 黒背景
+		0xff0000, // 黒背景（SHAPEマスクで隠される）
 		1,
 	); err != nil {
 		log.Println("軌跡ウィンドウ作成エラー:", err)
@@ -100,8 +100,8 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 		m.xConn,
 		gc,
 		xproto.Drawable(win.Id),
-		xproto.GcForeground|xproto.GcLineWidth|xproto.GcCapStyle,
-		[]uint32{Color, LineWidth, xproto.CapStyleRound},
+		xproto.GcForeground|xproto.GcLineWidth|xproto.GcCapStyle|xproto.GcJoinStyle,
+		[]uint32{Color, LineWidth, xproto.CapStyleRound, xproto.JoinStyleRound},
 	).Check()
 
 	// ウィンドウに直接線を描画
@@ -147,8 +147,8 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 	)
 
 	// マスクに線を描画（不透明）
-	xproto.ChangeGC(m.xConn, maskGC, xproto.GcForeground|xproto.GcLineWidth|xproto.GcCapStyle,
-		[]uint32{1, 8, xproto.CapStyleRound})
+	xproto.ChangeGC(m.xConn, maskGC, xproto.GcForeground|xproto.GcLineWidth|xproto.GcCapStyle|xproto.GcJoinStyle,
+		[]uint32{1, LineWidth, xproto.CapStyleRound, xproto.JoinStyleRound})
 	xproto.PolyLine(
 		m.xConn,
 		xproto.CoordModeOrigin,
@@ -204,10 +204,6 @@ func (m *Manager) setupWindowClickThrough(win *xwindow.Window) {
 // Update 軌跡の透明度を更新し、古い軌跡を削除
 func (m *Manager) Update() {
 	now := time.Now()
-	atom, err := xproto.InternAtom(m.xConn, true, uint16(len(atomOpacity)), atomOpacity).Reply()
-	if err != nil {
-		return
-	}
 
 	newTrails := make([]*Segment, 0, len(m.trails))
 
@@ -219,33 +215,6 @@ func (m *Manager) Update() {
 			xproto.FreeGC(m.xConn, segment.gc)
 			continue
 		}
-
-		// 時間経過に応じて透明度を計算（新しい=100%, 古い=0%）
-		progress := elapsed.Seconds() / Duration.Seconds()
-		opacityPercent := (1.0 - progress) * 100.0
-
-		maxOpacity := float64(uint32(0xFFFFFFFF))
-		opacity := opacityPercent / 100.0 * maxOpacity
-		opacityValue := uint32(opacity)
-
-		opacityBytes := []byte{
-			byte(opacityValue & 0xFF),
-			byte((opacityValue >> 8) & 0xFF),
-			byte((opacityValue >> 16) & 0xFF),
-			byte((opacityValue >> 24) & 0xFF),
-		}
-
-		winID := xproto.Window(segment.window.Id)
-		xproto.ChangePropertyChecked(
-			m.xConn,
-			xproto.PropModeReplace,
-			winID,
-			atom.Atom,
-			xproto.AtomCardinal,
-			32,
-			1,
-			opacityBytes,
-		).Check()
 
 		newTrails = append(newTrails, segment)
 	}
