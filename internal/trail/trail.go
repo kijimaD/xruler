@@ -211,8 +211,11 @@ func (m *Manager) Update() {
 		elapsed := now.Sub(segment.timestamp)
 
 		if elapsed > Duration {
-			segment.window.Destroy()
+			// GCを解放
 			xproto.FreeGC(m.xConn, segment.gc)
+			// ウィンドウをアンマップしてから破棄
+			segment.window.Unmap()
+			segment.window.Destroy()
 			continue
 		}
 
