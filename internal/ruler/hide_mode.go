@@ -20,12 +20,12 @@ type HideModeConfig struct {
 // DefaultHideModeConfig デフォルトの隠すモード設定
 func DefaultHideModeConfig() HideModeConfig {
 	return HideModeConfig{
-		HideHeight:     200,
-		CursorHeight:   50,
+		HideHeight:     400,
+		CursorHeight:   80,
 		BorderHeight:   2,
 		OverlayColor:   0xf0f0f0,
 		BorderColor:    0x000000,
-		OpacityPercent: 94,
+		OpacityPercent: 100,
 	}
 }
 
@@ -149,7 +149,7 @@ func (c HideModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window
 		bottomBorderID := xproto.Window(bottomBorderWin.Id)
 		xproto.ConfigureWindow(xConn, bottomBorderID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(cursorBottom-c.BorderHeight), uint32(screenWidth), uint32(c.BorderHeight)})
+			[]uint32{0, uint32(cursorBottom - c.BorderHeight), uint32(screenWidth), uint32(c.BorderHeight)})
 	}
 
 	if bottomHeight > 0 {
