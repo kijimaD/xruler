@@ -92,8 +92,6 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 		return
 	}
 
-	win.Map()
-
 	// GCを作成
 	gc, _ := xproto.NewGcontextId(m.xConn)
 	xproto.CreateGCChecked(
@@ -177,6 +175,9 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 	m.setupWindowClickThrough(win)
 	m.xConn.Sync()
 
+	// クリックスルー設定後にウィンドウを表示
+	win.Map()
+
 	segment := &Segment{
 		x1: x1, y1: y1, x2: x2, y2: y2,
 		timestamp: time.Now(),
@@ -191,14 +192,21 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 func (m *Manager) setupWindowClickThrough(win *xwindow.Window) {
 	region, err := xfixes.NewRegionId(m.xConn)
 	if err != nil {
+		log.Println("軌跡クリックスルー設定エラー(NewRegionId):", err)
 		return
 	}
 	defer xfixes.DestroyRegion(m.xConn, region)
 
-	xfixes.CreateRegionChecked(m.xConn, region, []xproto.Rectangle{{}}).Check()
+	if err := xfixes.CreateRegionChecked(m.xConn, region, []xproto.Rectangle{{}}).Check(); err != nil {
+		log.Println("軌跡クリックスルー設定エラー(CreateRegion):", err)
+		return
+	}
 
 	winID := xproto.Window(win.Id)
-	xfixes.SetWindowShapeRegionChecked(m.xConn, winID, shape.SkInput, 0, 0, region).Check()
+	if err := xfixes.SetWindowShapeRegionChecked(m.xConn, winID, shape.SkInput, 0, 0, region).Check(); err != nil {
+		log.Println("軌跡クリックスルー設定エラー(SetWindowShapeRegion):", err)
+		return
+	}
 }
 
 // Update 軌跡の透明度を更新し、古い軌跡を削除
