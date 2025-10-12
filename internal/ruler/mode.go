@@ -19,7 +19,7 @@ type Mode interface {
 	// CreateWindows ウィンドウを作成
 	CreateWindows(xuConn *xgbutil.XUtil, screenWidth, screenHeight int) ([]*xwindow.Window, error)
 	// UpdateWindows カーソル位置に応じてウィンドウを更新
-	UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorY, screenWidth, screenHeight int)
+	UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorX, cursorY, screenWidth, screenHeight int)
 	// GetOpacity 不透明度を返す
 	GetOpacity() float64
 }

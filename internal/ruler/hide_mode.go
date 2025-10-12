@@ -10,6 +10,7 @@ import (
 // HideModeConfig 隠すモードの設定
 type HideModeConfig struct {
 	HideHeight     int     // カーソル上下の隠す領域の高さ（ピクセル）
+	HideWidth      int     // カーソル左右の隠す領域の幅（ピクセル）
 	CursorHeight   int     // カーソル領域の高さ（ピクセル）
 	BorderHeight   int     // 枠線の高さ（ピクセル）
 	OverlayColor   uint32  // オーバーレイの色
@@ -21,6 +22,7 @@ type HideModeConfig struct {
 func DefaultHideModeConfig() HideModeConfig {
 	return HideModeConfig{
 		HideHeight:     400,
+		HideWidth:      1600,
 		CursorHeight:   80,
 		BorderHeight:   2,
 		OverlayColor:   0xf0f0f0,
@@ -114,7 +116,7 @@ func (c HideModeConfig) CreateWindows(xuConn *xgbutil.XUtil, screenWidth, screen
 }
 
 // UpdateWindows カーソル位置に応じてウィンドウを更新
-func (c HideModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorY, screenWidth, screenHeight int) {
+func (c HideModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorX, cursorY, screenWidth, screenHeight int) {
 	topWin := windows[0]
 	topBorderWin := windows[1]
 	bottomBorderWin := windows[2]
@@ -131,32 +133,37 @@ func (c HideModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window
 	bottomEnd := min(screenHeight, cursorBottom+c.HideHeight)
 	bottomHeight := bottomEnd - bottomStart
 
+	// カーソルの左側指定pxの範囲のみ表示
+	leftEdge := max(0, cursorX-c.HideWidth)
+	rightEdge := cursorX
+	width := rightEdge - leftEdge
+
 	if topHeight > 0 {
 		topID := xproto.Window(topWin.Id)
 		xproto.ConfigureWindow(xConn, topID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(topStart), uint32(screenWidth), uint32(topHeight)})
+			[]uint32{uint32(leftEdge), uint32(topStart), uint32(width), uint32(topHeight)})
 	}
 
 	if topBorderWin != nil {
 		topBorderID := xproto.Window(topBorderWin.Id)
 		xproto.ConfigureWindow(xConn, topBorderID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(cursorTop), uint32(screenWidth), uint32(c.BorderHeight)})
+			[]uint32{uint32(leftEdge), uint32(cursorTop), uint32(width), uint32(c.BorderHeight)})
 	}
 
 	if bottomBorderWin != nil {
 		bottomBorderID := xproto.Window(bottomBorderWin.Id)
 		xproto.ConfigureWindow(xConn, bottomBorderID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(cursorBottom - c.BorderHeight), uint32(screenWidth), uint32(c.BorderHeight)})
+			[]uint32{uint32(leftEdge), uint32(cursorBottom - c.BorderHeight), uint32(width), uint32(c.BorderHeight)})
 	}
 
 	if bottomHeight > 0 {
 		bottomID := xproto.Window(bottomWin.Id)
 		xproto.ConfigureWindow(xConn, bottomID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{0, uint32(bottomStart), uint32(screenWidth), uint32(bottomHeight)})
+			[]uint32{uint32(leftEdge), uint32(bottomStart), uint32(width), uint32(bottomHeight)})
 	}
 
 	xConn.Sync()

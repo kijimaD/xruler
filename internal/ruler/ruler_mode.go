@@ -54,7 +54,7 @@ func (c RulerModeConfig) CreateWindows(xuConn *xgbutil.XUtil, screenWidth, scree
 }
 
 // UpdateWindows カーソル位置に応じてウィンドウを更新
-func (c RulerModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorY, screenWidth, screenHeight int) {
+func (c RulerModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window, cursorX, cursorY, screenWidth, screenHeight int) {
 	topWin := windows[0]
 	rulerY := cursorY - c.RulerHeight/2
 
