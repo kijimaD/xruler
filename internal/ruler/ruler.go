@@ -2,6 +2,7 @@ package ruler
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/xgb"
@@ -16,10 +17,10 @@ import (
 )
 
 const (
-	PollInterval    = 16 * time.Millisecond // カーソル位置のポーリング間隔（約60fps）
-	xfixesMajor     = 6                     // XFixes拡張のメジャーバージョン
-	xfixesMinor     = 0                     // XFixes拡張のマイナーバージョン
-	extensionXFIXES = "XFIXES"              // XFixes拡張の名前
+	PollInterval    = 16 * time.Millisecond    // カーソル位置のポーリング間隔（約60fps）
+	xfixesMajor     = 6                        // XFixes拡張のメジャーバージョン
+	xfixesMinor     = 0                        // XFixes拡張のマイナーバージョン
+	extensionXFIXES = "XFIXES"                 // XFixes拡張の名前
 	atomOpacity     = "_NET_WM_WINDOW_OPACITY" // ウィンドウ不透明度を設定するアトム名
 )
 
@@ -33,6 +34,7 @@ type Ruler struct {
 	mode         Mode              // 動作モード
 	visible      bool              // 表示状態
 	trailMgr     *trail.Manager    // 軌跡管理
+	mu           sync.Mutex        // ウィンドウ操作の排他制御
 }
 
 // New ルーラーを作成
@@ -62,9 +64,11 @@ func (r *Ruler) Run() {
 
 		// 位置が変わった時のみ更新（不要な描画を削減）
 		if cy != lastY {
-			if r.visible {
-				r.mode.UpdateWindows(r.xConn, r.windows, cy, r.screenWidth, r.screenHeight)
+			r.mu.Lock()
+			if r.visible && len(r.windows) > 0 {
+				r.mode.UpdateWindows(r.xConn, r.windows, cx, cy, r.screenWidth, r.screenHeight)
 			}
+			r.mu.Unlock()
 			lastY = cy
 		}
 
@@ -150,21 +154,60 @@ func (r *Ruler) setupKeyboard() error {
 	return nil
 }
 
-// toggleVisibility 表示状態を切り替え
+// toggleVisibility 表示状態を切り替え（表示時は再作成）
 func (r *Ruler) toggleVisibility() {
-	r.visible = !r.visible
+	go func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
 
-	if r.visible {
-		for _, win := range r.windows {
-			win.Map()
+		r.visible = !r.visible
+
+		if r.visible {
+			// 既存のウィンドウを破棄
+			for _, win := range r.windows {
+				win.Unmap()
+				win.Destroy()
+			}
+
+			// 軌跡マネージャをクリーンアップ
+			if r.trailMgr != nil {
+				r.trailMgr.Clear()
+			}
+
+			r.xConn.Sync()
+
+			// ウィンドウを再作成
+			if err := r.createWindows(); err != nil {
+				log.Printf("ウィンドウ再作成エラー: %v", err)
+				return
+			}
+
+			// クリックスルー再設定
+			if err := r.setupClickThrough(); err != nil {
+				log.Printf("クリックスルー再設定エラー: %v", err)
+				return
+			}
+
+			// 透明度を再設定
+			if err := r.setupTransparency(); err != nil {
+				log.Printf("透明度再設定エラー: %v", err)
+				return
+			}
+
+			// 現在のカーソル位置でウィンドウを更新
+			cx, cy := r.getCursor()
+			if cx != -1 && cy != -1 {
+				r.mode.UpdateWindows(r.xConn, r.windows, cx, cy, r.screenWidth, r.screenHeight)
+			}
+
+			log.Println("ルーラー表示: ON")
+		} else {
+			for _, win := range r.windows {
+				win.Unmap()
+			}
+			log.Println("ルーラー表示: OFF")
 		}
-		log.Println("ルーラー表示: ON")
-	} else {
-		for _, win := range r.windows {
-			win.Unmap()
-		}
-		log.Println("ルーラー表示: OFF")
-	}
+	}()
 }
 
 func (r *Ruler) createWindows() error {
@@ -267,4 +310,3 @@ func (r *Ruler) getCursor() (int, int) {
 
 	return int(reply.RootX), int(reply.RootY)
 }
-

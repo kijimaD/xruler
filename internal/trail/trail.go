@@ -94,13 +94,16 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 
 	// GCを作成
 	gc, _ := xproto.NewGcontextId(m.xConn)
-	xproto.CreateGCChecked(
+	if err := xproto.CreateGCChecked(
 		m.xConn,
 		gc,
 		xproto.Drawable(win.Id),
 		xproto.GcForeground|xproto.GcLineWidth|xproto.GcCapStyle|xproto.GcJoinStyle,
 		[]uint32{Color, LineWidth, xproto.CapStyleRound, xproto.JoinStyleRound},
-	).Check()
+	).Check(); err != nil {
+		log.Println("GC作成エラー:", err)
+		return
+	}
 
 	// ウィンドウに直接線を描画
 	xproto.PolyLine(
@@ -109,8 +112,8 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 		xproto.Drawable(win.Id),
 		gc,
 		[]xproto.Point{
-			{int16(x1 - minX), int16(y1 - minY)},
-			{int16(x2 - minX), int16(y2 - minY)},
+			{X: int16(x1 - minX), Y: int16(y1 - minY)},
+			{X: int16(x2 - minX), Y: int16(y2 - minY)},
 		},
 	)
 
@@ -118,30 +121,36 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 	setup := xproto.Setup(m.xConn)
 	screen := setup.DefaultScreen(m.xConn)
 	maskPixmap, _ := xproto.NewPixmapId(m.xConn)
-	xproto.CreatePixmapChecked(
+	if err := xproto.CreatePixmapChecked(
 		m.xConn,
 		1, // 1-bit depth
 		maskPixmap,
 		xproto.Drawable(screen.Root),
 		uint16(width),
 		uint16(height),
-	).Check()
+	).Check(); err != nil {
+		log.Println("マスクPixmap作成エラー:", err)
+		return
+	}
 
 	maskGC, _ := xproto.NewGcontextId(m.xConn)
-	xproto.CreateGCChecked(
+	if err := xproto.CreateGCChecked(
 		m.xConn,
 		maskGC,
 		xproto.Drawable(maskPixmap),
 		xproto.GcForeground|xproto.GcBackground,
 		[]uint32{0, 0},
-	).Check()
+	).Check(); err != nil {
+		log.Println("マスクGC作成エラー:", err)
+		return
+	}
 
 	// マスクをクリア（透明）
 	xproto.PolyFillRectangle(
 		m.xConn,
 		xproto.Drawable(maskPixmap),
 		maskGC,
-		[]xproto.Rectangle{{0, 0, uint16(width), uint16(height)}},
+		[]xproto.Rectangle{{X: 0, Y: 0, Width: uint16(width), Height: uint16(height)}},
 	)
 
 	// マスクに線を描画（不透明）
@@ -153,13 +162,16 @@ func (m *Manager) Add(x1, y1, x2, y2 int) {
 		xproto.Drawable(maskPixmap),
 		maskGC,
 		[]xproto.Point{
-			{int16(x1 - minX), int16(y1 - minY)},
-			{int16(x2 - minX), int16(y2 - minY)},
+			{X: int16(x1 - minX), Y: int16(y1 - minY)},
+			{X: int16(x2 - minX), Y: int16(y2 - minY)},
 		},
 	)
 
 	// マスクを適用
-	shape.Init(m.xConn)
+	if err := shape.Init(m.xConn); err != nil {
+		log.Println("Shape拡張初期化エラー:", err)
+		return
+	}
 	shape.Mask(
 		m.xConn,
 		shape.SoSet,
@@ -243,4 +255,18 @@ func (m *Manager) UpdatePosition(x, y int) {
 // GetLastPosition 最後の位置を取得
 func (m *Manager) GetLastPosition() (int, int) {
 	return m.lastX, m.lastY
+}
+
+// Clear すべての軌跡をクリア
+func (m *Manager) Clear() {
+	for _, segment := range m.trails {
+		if segment.window != nil {
+			xproto.FreeGC(m.xConn, segment.gc)
+			segment.window.Unmap()
+			segment.window.Destroy()
+		}
+	}
+	m.trails = nil
+	m.lastX = -1
+	m.lastY = -1
 }

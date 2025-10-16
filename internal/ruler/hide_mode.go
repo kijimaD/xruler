@@ -1,6 +1,8 @@
 package ruler
 
 import (
+	"log"
+
 	"github.com/BurntSushi/xgb"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgbutil"
@@ -22,7 +24,7 @@ type HideModeConfig struct {
 func DefaultHideModeConfig() HideModeConfig {
 	return HideModeConfig{
 		HideHeight:     400,
-		HideWidth:      1600,
+		HideWidth:      2400,
 		CursorHeight:   80,
 		BorderHeight:   2,
 		OverlayColor:   0xf0f0f0,
@@ -140,31 +142,37 @@ func (c HideModeConfig) UpdateWindows(xConn *xgb.Conn, windows []*xwindow.Window
 
 	if topHeight > 0 {
 		topID := xproto.Window(topWin.Id)
-		xproto.ConfigureWindow(xConn, topID,
+		if err := xproto.ConfigureWindowChecked(xConn, topID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{uint32(leftEdge), uint32(topStart), uint32(width), uint32(topHeight)})
+			[]uint32{uint32(leftEdge), uint32(topStart), uint32(width), uint32(topHeight)}).Check(); err != nil {
+			log.Printf("topウィンドウ更新エラー: %v", err)
+		}
 	}
 
 	if topBorderWin != nil {
 		topBorderID := xproto.Window(topBorderWin.Id)
-		xproto.ConfigureWindow(xConn, topBorderID,
+		if err := xproto.ConfigureWindowChecked(xConn, topBorderID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{uint32(leftEdge), uint32(cursorTop), uint32(width), uint32(c.BorderHeight)})
+			[]uint32{uint32(leftEdge), uint32(cursorTop), uint32(width), uint32(c.BorderHeight)}).Check(); err != nil {
+			log.Printf("top枠線ウィンドウ更新エラー: %v", err)
+		}
 	}
 
 	if bottomBorderWin != nil {
 		bottomBorderID := xproto.Window(bottomBorderWin.Id)
-		xproto.ConfigureWindow(xConn, bottomBorderID,
+		if err := xproto.ConfigureWindowChecked(xConn, bottomBorderID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{uint32(leftEdge), uint32(cursorBottom - c.BorderHeight), uint32(width), uint32(c.BorderHeight)})
+			[]uint32{uint32(leftEdge), uint32(cursorBottom - c.BorderHeight), uint32(width), uint32(c.BorderHeight)}).Check(); err != nil {
+			log.Printf("bottom枠線ウィンドウ更新エラー: %v", err)
+		}
 	}
 
 	if bottomHeight > 0 {
 		bottomID := xproto.Window(bottomWin.Id)
-		xproto.ConfigureWindow(xConn, bottomID,
+		if err := xproto.ConfigureWindowChecked(xConn, bottomID,
 			xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight,
-			[]uint32{uint32(leftEdge), uint32(bottomStart), uint32(width), uint32(bottomHeight)})
+			[]uint32{uint32(leftEdge), uint32(bottomStart), uint32(width), uint32(bottomHeight)}).Check(); err != nil {
+			log.Printf("bottomウィンドウ更新エラー: %v", err)
+		}
 	}
-
-	xConn.Sync()
 }
